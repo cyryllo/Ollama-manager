@@ -1,0 +1,17 @@
+# Bajtkod Pythona
+__pycache__/
+*.pyc
+*.pyo
+
+# Wirtualne środowiska
+.venv/
+venv/
+env/
+
+# Pliki edytorów/IDE
+.vscode/
+.idea/
+*.swp
+
+# Kontekst dla asystentów AI - tylko lokalnie, nie trafia do repo
+CLAUDE.md
