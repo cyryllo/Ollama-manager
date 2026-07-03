@@ -42,7 +42,7 @@ from PyQt6.QtWidgets import (
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.3.1"
+WERSJA = "0.3.2"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -308,46 +308,48 @@ def _webui_dziala():
 
 
 def webui_uruchom():
-    # WHAT: jeśli WebUI już odpowiada - nic nie rób. Jeśli nie - odpal
-    #       'open-webui serve' jako osobny, odłączony proces i poczekaj, aż wstanie.
-    # WHY:  odłączony proces (start_new_session) przeżyje zamknięcie naszej
-    #       aplikacji - to osobny, długo działający serwer, nie jednorazowa akcja.
-    #       Sprawdzenie na starcie chroni przed odpaleniem drugiej kopii serwera.
+    # WHAT: jeśli WebUI już odpowiada - nic nie rób. Jeśli nie - zapisz/odśwież
+    #       jego usługę systemd --user i ją wystartuj, potem poczekaj, aż odpowie.
+    # WHY:  ta sama usługa --user co przy autostarcie (_zapisz_webui_unit) - jedna
+    #       spójna droga uruchamiania, dzięki czemu "Zatrzymaj" (webui_zatrzymaj)
+    #       zawsze działa, niezależnie od tego, czy WebUI wystartowało z tego
+    #       przycisku, czy z włączonego wcześniej autostartu.
     if _webui_dziala():
         return
-    binarka = webui_binarka()
-    if not binarka:
-        raise RuntimeError("Open WebUI nie jest zainstalowane.")
+    _zapisz_webui_unit()
+    _systemctl_user(["start", "open-webui.service"])
 
-    # WHY: pierwsze uruchomienie robi migracje bazy i potrafi ściągnąć domyślny
-    #      model embeddingowy do RAG - bez przechwyconego logu nie dało się
-    #      zobaczyć, czy proces w ogóle wystartował, czy od razu się wywalił.
-    log_sciezka = Path(tempfile.gettempdir()) / "ollama-manager-webui.log"
-    env = os.environ.copy()
-    env["OLLAMA_BASE_URL"] = OLLAMA_URL  # WHY: WebUI ma gadać z tą samą Ollamą co reszta apki
-    with open(log_sciezka, "w") as log_plik:
-        proces = subprocess.Popen(
-            [binarka, "serve"],
-            env=env,
-            stdout=log_plik,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-
-    # WHY: 3 minuty zamiast 30 s - pierwszy start bywa wolniejszy niż kolejne.
-    #      Jeśli proces padnie wcześniej, nie ma sensu czekać do końca limitu.
+    # WHY: 3 minuty zamiast 30 s - pierwsze uruchomienie robi migracje bazy
+    #      i potrafi ściągnąć domyślny model embeddingowy do RAG.
     for _ in range(180):
         if _webui_dziala():
             return
-        if proces.poll() is not None:
-            tresc = log_sciezka.read_text(errors="replace")[-2000:]
-            raise RuntimeError(f"Proces WebUI zakończył się przedwcześnie:\n{tresc}")
         time.sleep(1)
 
-    tresc = log_sciezka.read_text(errors="replace")[-2000:]
     raise RuntimeError(
-        f"WebUI nie odpowiedziało w ciągu 3 minut (pełny log: {log_sciezka}):\n{tresc}"
+        "WebUI nie odpowiedziało w ciągu 3 minut. Log usługi: "
+        "journalctl --user -u open-webui -e"
     )
+
+
+def webui_zatrzymaj():
+    # WHAT: zatrzymuje usługę systemd --user Open WebUI. Jeśli systemd nie zna
+    #       takiej usługi ("not loaded" - WebUI działa jako goły proces, np.
+    #       uruchomiony ręcznie albo starszą wersją tej aplikacji sprzed
+    #       przejścia na systemd), dobija proces bezpośrednio po nazwie polecenia.
+    # WHY:  bez tego fallbacku przycisk "Zatrzymaj" nic by nie robił w takim przypadku.
+    try:
+        _systemctl_user(["stop", "open-webui.service"])
+        return
+    except RuntimeError as e:
+        if "not loaded" not in str(e) and "not found" not in str(e):
+            raise
+
+    binarka = webui_binarka()
+    wzorzec = f"{binarka} serve" if binarka else "open-webui serve"
+    wynik = subprocess.run(["pkill", "-f", wzorzec], capture_output=True, text=True, timeout=5)
+    if wynik.returncode not in (0, 1):  # WHY: 1 = pkill nie znalazł procesu - i tak już zatrzymane
+        raise RuntimeError(wynik.stderr.strip() or "pkill: nie udało się zatrzymać procesu WebUI")
 
 
 def _webui_service_sciezka():
@@ -376,6 +378,33 @@ def webui_autostart_wlaczony():
     return r.stdout.strip() == "enabled"
 
 
+def _zapisz_webui_unit():
+    # WHAT: (re)zapisuje plik usługi systemd --user dla Open WebUI i przeładowuje systemd.
+    # WHY:  wspólne dla ręcznego uruchamiania i włączania autostartu - jedna prawda
+    #       o tym, jak wygląda usługa (ExecStart, zmienne środowiskowe), zamiast
+    #       dwóch osobnych dróg startowania, które trzeba by osobno zatrzymywać.
+    binarka = webui_binarka()
+    if not binarka:
+        raise RuntimeError("Open WebUI nie jest zainstalowane.")
+    tresc = (
+        "[Unit]\n"
+        "Description=Open WebUI\n"
+        "After=network.target\n"
+        "\n"
+        "[Service]\n"
+        f"ExecStart={binarka} serve\n"
+        f"Environment=OLLAMA_BASE_URL={OLLAMA_URL}\n"
+        "Restart=on-failure\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=default.target\n"
+    )
+    sciezka = _webui_service_sciezka()
+    sciezka.parent.mkdir(parents=True, exist_ok=True)
+    sciezka.write_text(tresc)
+    _systemctl_user(["daemon-reload"])
+
+
 def webui_autostart(wlacz):
     # WHAT: włącza/wyłącza autostart Open WebUI po zalogowaniu przez usługę systemd --user.
     # WHY:  to usługa UŻYTKOWNIKA (nie systemowa jak Ollama) - open-webui i tak żyje
@@ -383,26 +412,7 @@ def webui_autostart(wlacz):
     #       powodu prosić o roota. 'enable --now'/'disable --now' od razu też
     #       startuje/zatrzymuje serwer, więc nie trzeba osobno klikać "Uruchom".
     if wlacz:
-        binarka = webui_binarka()
-        if not binarka:
-            raise RuntimeError("Open WebUI nie jest zainstalowane.")
-        tresc = (
-            "[Unit]\n"
-            "Description=Open WebUI\n"
-            "After=network.target\n"
-            "\n"
-            "[Service]\n"
-            f"ExecStart={binarka} serve\n"
-            f"Environment=OLLAMA_BASE_URL={OLLAMA_URL}\n"
-            "Restart=on-failure\n"
-            "\n"
-            "[Install]\n"
-            "WantedBy=default.target\n"
-        )
-        sciezka = _webui_service_sciezka()
-        sciezka.parent.mkdir(parents=True, exist_ok=True)
-        sciezka.write_text(tresc)
-        _systemctl_user(["daemon-reload"])
+        _zapisz_webui_unit()
         _systemctl_user(["enable", "--now", "open-webui.service"])
     else:
         _systemctl_user(["disable", "--now", "open-webui.service"])
@@ -767,19 +777,17 @@ class MainWindow(QMainWindow):
         strona = QWidget()
         layout = QVBoxLayout(strona)
 
-        # WHY: bez osobnego statusu tutaj - ten sam stan jest już na kafelku
-        #      OLLAMA w pasku statystyk na górze okna, nie ma po co go dublować.
-        layout.addLayout(self._naglowek_sekcji("Usługa Ollama"))
-
         kolumny = QHBoxLayout()
         layout.addLayout(kolumny, 1)
 
-        # --- Lewa kolumna: Sterowanie + Open WebUI ---
+        # --- Lewa kolumna: Ollama + Open WebUI, ta sama "ramka" i styl nagłówka ---
         lewa_kolumna = QVBoxLayout()
         kolumny.addLayout(lewa_kolumna, 1)
 
-        karta_sterowanie = QGroupBox("Sterowanie")
-        uk_sterowanie = QVBoxLayout(karta_sterowanie)
+        karta_ollama = QGroupBox("Ollama")
+        uk_ollama = QVBoxLayout(karta_ollama)
+        self.lbl_ollama_status = QLabel("sprawdzam...")
+        uk_ollama.addLayout(self._naglowek_sekcji("Usługa systemd", self.lbl_ollama_status))
         pasek_przyciskow = QHBoxLayout()
         self.btn_start = QPushButton("Uruchom")
         self.btn_start.clicked.connect(self.start_uslugi)
@@ -791,20 +799,26 @@ class MainWindow(QMainWindow):
         pasek_przyciskow.addWidget(self.btn_start)
         pasek_przyciskow.addWidget(self.btn_stop)
         pasek_przyciskow.addWidget(self.btn_instaluj)
-        uk_sterowanie.addLayout(pasek_przyciskow)
+        uk_ollama.addLayout(pasek_przyciskow)
         self.chk_autostart = QCheckBox("Uruchamiaj automatycznie przy starcie systemu")
         self.chk_autostart.toggled.connect(self.przelacz_autostart)
-        uk_sterowanie.addWidget(self.chk_autostart)
-        lewa_kolumna.addWidget(karta_sterowanie)
+        uk_ollama.addWidget(self.chk_autostart)
+        lewa_kolumna.addWidget(karta_ollama)
 
         # --- Open WebUI, w takiej samej ramce (QGroupBox) jak Sterowanie ---
         karta_webui = QGroupBox("Open WebUI")
         uk_webui = QVBoxLayout(karta_webui)
         self.lbl_webui_status = QLabel("sprawdzam...")
         uk_webui.addLayout(self._naglowek_sekcji("Panel czatu w przeglądarce", self.lbl_webui_status))
+        pasek_webui = QHBoxLayout()
         self.btn_webui = QPushButton("sprawdzam...")
         self.btn_webui.clicked.connect(self.klik_webui)
-        uk_webui.addWidget(self.btn_webui)
+        self.btn_webui_stop = QPushButton("Zatrzymaj")
+        self.btn_webui_stop.setEnabled(False)  # WHY: aktywny dopiero gdy WebUI faktycznie działa
+        self.btn_webui_stop.clicked.connect(self.zatrzymaj_webui)
+        pasek_webui.addWidget(self.btn_webui)
+        pasek_webui.addWidget(self.btn_webui_stop)
+        uk_webui.addLayout(pasek_webui)
         # WHY: usługa --user, więc to osobny checkbox od autostartu Ollamy (systemowego)
         self.chk_webui_autostart = QCheckBox("Uruchamiaj automatycznie po zalogowaniu")
         self.chk_webui_autostart.setEnabled(False)  # WHY: bez sensu, dopóki WebUI nie jest zainstalowane
@@ -824,20 +838,17 @@ class MainWindow(QMainWindow):
         return strona
 
     def _zakladka_modele_lokalne(self):
-        # WHAT: zainstalowane modele (lista + usuwanie) i pobieranie nowych -
-        #       cały cykl życia modelu trzymanego lokalnie, w jednej zakładce.
+        # WHAT: dwie kolumny - lewa: pobieranie nowych modeli; prawa:
+        #       zainstalowane modele (lista + usuwanie) na całą wysokość zakładki.
         strona = QWidget()
         layout = QVBoxLayout(strona)
 
-        self.btn_usun = QPushButton("Usuń zaznaczony")
-        self.btn_usun.setEnabled(False)  # WHY: aktywny dopiero po zaznaczeniu modelu
-        self.btn_usun.clicked.connect(self.usun_model)
-        layout.addLayout(self._naglowek_sekcji("Zainstalowane modele", self.btn_usun))
-        self.lista_modeli = QListWidget()
-        self.lista_modeli.itemSelectionChanged.connect(self._aktualizuj_przycisk_usun)
-        layout.addWidget(self.lista_modeli, 1)
+        kolumny = QHBoxLayout()
+        layout.addLayout(kolumny, 1)
 
-        layout.addLayout(self._naglowek_sekcji("Pobierz nowy model"))
+        # --- Lewa kolumna: Pobierz nowy model ---
+        karta_pobierz = QGroupBox("Pobierz nowy model")
+        uk_pobierz = QVBoxLayout(karta_pobierz)
         pasek_pull = QHBoxLayout()
         self.combo_modele = QComboBox()
         self.combo_modele.setEditable(True)  # WHY: pozwól wpisać też dowolną nazwę
@@ -851,7 +862,7 @@ class MainWindow(QMainWindow):
         self.btn_pull.clicked.connect(self.pobierz_model)
         pasek_pull.addWidget(self.combo_modele, 1)
         pasek_pull.addWidget(self.btn_pull)
-        layout.addLayout(pasek_pull)
+        uk_pobierz.addLayout(pasek_pull)
 
         # WHAT: link do pełnej listy modeli na stronie Ollamy.
         # WHY:  powyższa lista to tylko garść popularnych modeli - reszta jest
@@ -860,32 +871,62 @@ class MainWindow(QMainWindow):
             'Więcej modeli: <a href="https://ollama.com/library">ollama.com/library</a>'
         )
         lbl_link.setOpenExternalLinks(True)
-        layout.addWidget(lbl_link)
+        uk_pobierz.addWidget(lbl_link)
 
         self.pasek_postepu = QProgressBar()
         self.pasek_postepu.setVisible(False)
-        layout.addWidget(self.pasek_postepu)
+        uk_pobierz.addWidget(self.pasek_postepu)
+        uk_pobierz.addStretch(1)  # WHY: karta trzyma się góry lewej kolumny
+        kolumny.addWidget(karta_pobierz, 1)
+
+        # --- Prawa kolumna: Zainstalowane modele ---
+        karta_zainstalowane = QGroupBox("Zainstalowane modele")
+        uk_zainstalowane = QVBoxLayout(karta_zainstalowane)
+        self.btn_usun = QPushButton("Usuń zaznaczony")
+        self.btn_usun.setEnabled(False)  # WHY: aktywny dopiero po zaznaczeniu modelu
+        self.btn_usun.clicked.connect(self.usun_model)
+        pasek_usun = QHBoxLayout()
+        pasek_usun.addStretch(1)
+        pasek_usun.addWidget(self.btn_usun)
+        uk_zainstalowane.addLayout(pasek_usun)
+        self.lista_modeli = QListWidget()
+        self.lista_modeli.itemSelectionChanged.connect(self._aktualizuj_przycisk_usun)
+        uk_zainstalowane.addWidget(self.lista_modeli)
+        kolumny.addWidget(karta_zainstalowane, 1)
+
         return strona
 
     def _zakladka_modele_zdalne(self):
-        # WHAT: dodawanie modeli zdalnych (RemoteHost) + lista tych już utworzonych.
+        # WHAT: dwie kolumny - lewa: dodawanie modeli zdalnych (RemoteHost);
+        #       prawa: lista tych już utworzonych, na całą wysokość zakładki.
         # WHY:  lista jest PRZEFILTROWANA (tylko modele z ustawionym REMOTE_HOST,
         #       sprawdzanym przez /api/show) - odróżnia je od zwykłych, lokalnych
         #       modeli w zakładce "Modele lokalne".
         strona = QWidget()
         layout = QVBoxLayout(strona)
 
-        layout.addLayout(self._naglowek_sekcji("Dodaj model zdalny"))
+        kolumny = QHBoxLayout()
+        layout.addLayout(kolumny, 1)
+
+        # --- Lewa kolumna: Dodaj model zdalny ---
+        karta_dodaj = QGroupBox("Dodaj model zdalny")
+        uk_dodaj = QVBoxLayout(karta_dodaj)
         opis_remote = QLabel("Podepnij zdalny host (np. BC-250) pod lokalną Ollamę.")
         opis_remote.setWordWrap(True)
-        layout.addWidget(opis_remote)
+        uk_dodaj.addWidget(opis_remote)
         self.btn_dodaj_remote = QPushButton("Dodaj model zdalny...")
         self.btn_dodaj_remote.clicked.connect(self.dodaj_model_zdalny_dialog)
-        layout.addWidget(self.btn_dodaj_remote)
+        uk_dodaj.addWidget(self.btn_dodaj_remote)
+        uk_dodaj.addStretch(1)  # WHY: karta trzyma się góry lewej kolumny
+        kolumny.addWidget(karta_dodaj, 1)
 
-        layout.addLayout(self._naglowek_sekcji("Modele z REMOTE_HOST"))
+        # --- Prawa kolumna: Modele z REMOTE_HOST ---
+        karta_lista = QGroupBox("Modele z REMOTE_HOST")
+        uk_lista = QVBoxLayout(karta_lista)
         self.lista_modele_zdalne = QListWidget()
-        layout.addWidget(self.lista_modele_zdalne, 1)
+        uk_lista.addWidget(self.lista_modele_zdalne)
+        kolumny.addWidget(karta_lista, 1)
+
         return strona
 
     # --- Pomocnicze ---
@@ -919,6 +960,11 @@ class MainWindow(QMainWindow):
 
     def _po_odswiezeniu(self, stan):
         # WHAT: przełóż stan usługi/API na wygląd okna.
+        # WHY: ten sam wzorzec statusu instalacji co przy karcie Open WebUI -
+        #      spójny styl obu kart w zakładce "Usługi".
+        self.lbl_ollama_status.setText(
+            "zainstalowana ✓" if stan["zainstalowana"] else "nie zainstalowana ✗"
+        )
         if not stan["zainstalowana"]:
             # WHY: bez binarki 'ollama' sterowanie usługą nie ma sensu - chowamy
             #      Start/Stop/autostart i pokazujemy tylko przycisk instalacji.
@@ -960,13 +1006,18 @@ class MainWindow(QMainWindow):
             self.lista_zaladowane.addItem(f"{nazwa}  —  {vram_gb:.1f} GB VRAM")
 
         # WHAT: jeden przycisk, dwa znaczenia - "Zainstaluj" albo "Uruchom",
-        #       zależnie od tego, czy binarka open-webui już tu jest.
+        #       zależnie od tego, czy binarka open-webui już tu jest. Drugi
+        #       przycisk ("Zatrzymaj") aktywny tylko gdy WebUI faktycznie działa.
         self._webui_zainstalowane = stan["webui"]
         self.lbl_webui_status.setText("zainstalowane ✓" if stan["webui"] else "nie zainstalowane ✗")
         webui_w_toku = bool(self._webui_worker and self._webui_worker.isRunning())
-        self.btn_webui.setEnabled(not webui_w_toku)
-        if not webui_w_toku:
+        if webui_w_toku:
+            self.btn_webui.setEnabled(False)
+            self.btn_webui_stop.setEnabled(False)
+        else:
             self.btn_webui.setText("Uruchom WebUI" if stan["webui"] else "Zainstaluj WebUI")
+            self.btn_webui.setEnabled(not stan["webui_dziala"])
+            self.btn_webui_stop.setEnabled(stan["webui"] and stan["webui_dziala"])
 
         # WHY: bez sensu włączać autostart czegoś, co nie jest zainstalowane;
         #      blokujemy sygnały jak przy chk_autostart, żeby nie odpalić
@@ -1069,6 +1120,13 @@ class MainWindow(QMainWindow):
 
         worker.zakonczono.connect(_po_uruchomieniu)
         worker.start()
+
+    def zatrzymaj_webui(self):
+        if self._webui_worker and self._webui_worker.isRunning():
+            self.wpis_log("Operacja na WebUI już trwa - poczekaj na zakończenie.")
+            return
+        self.wpis_log("Zatrzymuję Open WebUI...")
+        self._webui_worker = self._uruchom_akcje(webui_zatrzymaj, "Zatrzymanie Open WebUI")
 
     # --- Sterowanie usługą ---
     def start_uslugi(self):
