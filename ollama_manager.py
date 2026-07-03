@@ -40,7 +40,7 @@ from PyQt6.QtWidgets import (
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.3.3"
+WERSJA = "0.3.4"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -55,6 +55,10 @@ SERVICE_NAME = "ollama"
 # WHAT: adres panelu Open WebUI (domyślny port 'open-webui serve').
 # WHY:  wydzielony na górę tak jak reszta adresów - gdybyś kiedyś zmienił port.
 WEBUI_URL = "http://localhost:8080"
+
+# WHAT: adres agregatora LiteLLM (domyślny port 'litellm --config ...').
+# WHY:  jw. - jedno miejsce do zmiany, gdyby port kolidował z czymś innym.
+LITELLM_URL = "http://localhost:4000"
 
 # WHAT: modele podpowiadane w rozwijanej liście pobierania.
 # WHY:  przekrój popularnych rodzin (Llama, Gemma, Mistral, Phi, DeepSeek, Qwen) -
@@ -357,6 +361,181 @@ def webui_autostart(wlacz):
 
 
 # =============================================================================
+#  LiteLLM - agregator wielu serwerów Ollamy pod jednym API (patrz CLAUDE.md,
+#  sekcja roadmapy "Proxy dla modeli zdalnych przez LiteLLM")
+# =============================================================================
+def litellm_binarka():
+    # WHAT: jak webui_binarka() - szuka binarki 'litellm' w PATH albo ~/.local/bin.
+    znaleziona = shutil.which("litellm")
+    if znaleziona:
+        return znaleziona
+    kandydat = Path.home() / ".local" / "bin" / "litellm"
+    return str(kandydat) if kandydat.exists() else None
+
+
+def litellm_zainstalowane():
+    return litellm_binarka() is not None
+
+
+def litellm_zainstaluj():
+    # WHAT: instaluje LiteLLM (z obsługą proxy) przez 'uv tool install'.
+    # WHY:  ten sam wzorzec co Open WebUI (bez Dockera/roota), ale prościej -
+    #       LiteLLM (stan na 2026) wspiera Pythona 3.10-3.13, więc w
+    #       przeciwieństwie do Open WebUI nie trzeba pinować konkretnej wersji.
+    uv = _uv_binarka()
+    if not uv:
+        wynik = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--user", "uv"],
+            capture_output=True, text=True, timeout=None,
+        )
+        if wynik.returncode != 0:
+            raise RuntimeError(wynik.stderr.strip() or "instalacja uv: nieznany błąd")
+        uv = _uv_binarka()
+        if not uv:
+            raise RuntimeError("Zainstalowano 'uv', ale nie widać go w ~/.local/bin.")
+
+    wynik = subprocess.run(
+        [uv, "tool", "install", "litellm[proxy]"],
+        capture_output=True, text=True, timeout=None,
+    )
+    if wynik.returncode != 0:
+        raise RuntimeError(wynik.stderr.strip() or "uv tool install: nieznany błąd")
+
+
+def _litellm_dziala():
+    try:
+        r = requests.get(f"{LITELLM_URL}/health/liveliness", timeout=1)
+        return r.status_code < 500
+    except requests.RequestException:
+        return False
+
+
+def _litellm_config_sciezka():
+    return Path.home() / ".config" / "ollama-manager" / "litellm_config.yaml"
+
+
+def _wykryj_modele_na_serwerach(serwery):
+    # WHAT: dla każdego serwera z listy (TA SAMA lista co przełącznik na pasku)
+    #       pyta /api/tags o zainstalowane modele.
+    # WHY:  jedno źródło prawdy o hostach - żeby dodać model do agregatora,
+    #       wystarczy mieć host na liście serwerów, bez osobnej listy do
+    #       ręcznego utrzymywania w dwóch miejscach naraz.
+    wpisy = []
+    for s in serwery:
+        adres = s["adres"].rstrip("/")
+        try:
+            r = requests.get(f"{adres}/api/tags", timeout=3)
+            r.raise_for_status()
+            modele = [m["name"] for m in r.json().get("models", [])]
+        except requests.RequestException:
+            continue  # WHY: host akurat nieosiągalny - pomijamy, nie wywalamy całości
+        for model in modele:
+            wpisy.append((s["nazwa"], model, adres))
+    return wpisy
+
+
+def _zbuduj_config_litellm(serwery):
+    # WHAT: generuje treść config.yaml dla LiteLLM - jeden wpis w model_list
+    #       na każdy model na każdym hoście.
+    # WHY:  format jest prosty (lista słowników o 3 polach tekstowych), więc
+    #       piszemy YAML ręcznie zamiast dociągać zależność 'pyyaml'.
+    def _yaml_str(tekst):
+        return '"' + tekst.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    wpisy = _wykryj_modele_na_serwerach(serwery)
+    if not wpisy:
+        return "model_list: []\n"
+
+    linie = ["model_list:"]
+    for _nazwa_hosta, model, adres in wpisy:
+        linie.append(f"  - model_name: {_yaml_str(model)}")
+        linie.append("    litellm_params:")
+        linie.append(f"      model: {_yaml_str('ollama_chat/' + model)}")
+        linie.append(f"      api_base: {_yaml_str(adres)}")
+    return "\n".join(linie) + "\n"
+
+
+def litellm_zapisz_config(serwery):
+    sciezka = _litellm_config_sciezka()
+    sciezka.parent.mkdir(parents=True, exist_ok=True)
+    sciezka.write_text(_zbuduj_config_litellm(serwery))
+    return sciezka
+
+
+def _litellm_service_sciezka():
+    return Path.home() / ".config" / "systemd" / "user" / "litellm.service"
+
+
+def _zapisz_litellm_unit():
+    # WHAT: (re)zapisuje plik usługi systemd --user dla LiteLLM i przeładowuje systemd.
+    # WHY:  ten sam wzorzec co Open WebUI - jedna droga uruchamiania, żeby
+    #       "Zatrzymaj" działało niezależnie od tego, skąd LiteLLM wystartował.
+    binarka = litellm_binarka()
+    if not binarka:
+        raise RuntimeError("LiteLLM nie jest zainstalowane.")
+    sciezka_config = _litellm_config_sciezka()
+    tresc = (
+        "[Unit]\n"
+        "Description=LiteLLM - agregator modeli Ollama\n"
+        "After=network.target\n"
+        "\n"
+        "[Service]\n"
+        f"ExecStart={binarka} --config {sciezka_config}\n"
+        "Restart=on-failure\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=default.target\n"
+    )
+    sciezka = _litellm_service_sciezka()
+    sciezka.parent.mkdir(parents=True, exist_ok=True)
+    sciezka.write_text(tresc)
+    _systemctl_user(["daemon-reload"])
+
+
+def litellm_uruchom(serwery):
+    # WHAT: generuje świeży config z aktualnej listy serwerów, (re)startuje
+    #       usługę systemd --user i czeka, aż API zacznie odpowiadać.
+    # WHY:  config generujemy na nowo przy KAŻDYM starcie - lista serwerów
+    #       (i modeli na nich) mogła się zmienić od ostatniego uruchomienia.
+    litellm_zapisz_config(serwery)
+    _zapisz_litellm_unit()
+    _systemctl_user(["restart", "litellm.service"])
+
+    for _ in range(60):
+        if _litellm_dziala():
+            return
+        time.sleep(1)
+
+    raise RuntimeError(
+        "LiteLLM nie odpowiedziało w ciągu 60 s. Log usługi: "
+        "journalctl --user -u litellm -e"
+    )
+
+
+def litellm_zatrzymaj():
+    _systemctl_user(["stop", "litellm.service"])
+
+
+def litellm_autostart_wlaczony():
+    r = subprocess.run(
+        ["systemctl", "--user", "is-enabled", "litellm.service"],
+        capture_output=True, text=True, timeout=3,
+    )
+    return r.stdout.strip() == "enabled"
+
+
+def litellm_autostart(wlacz, serwery):
+    # WHY: 'enable --now' potrzebuje świeżego configu i unitu - tak samo jak
+    #      ręczne uruchomienie, żeby autostart nie odpalił się na nieaktualnej liście.
+    if wlacz:
+        litellm_zapisz_config(serwery)
+        _zapisz_litellm_unit()
+        _systemctl_user(["enable", "--now", "litellm.service"])
+    else:
+        _systemctl_user(["disable", "--now", "litellm.service"])
+
+
+# =============================================================================
 #  Warstwa sieci - odseparowana od GUI
 # =============================================================================
 class OllamaClient:
@@ -453,6 +632,10 @@ class RefreshWorker(QThread):
         #      pasek statystyk ma pokazywać żywy stan, nie tylko obecność binarki.
         webui_dziala = _webui_dziala()
 
+        litellm = litellm_zainstalowane()
+        litellm_autostart = litellm_autostart_wlaczony()
+        litellm_dziala = _litellm_dziala()
+
         self.wynik.emit({
             "zainstalowana": zainstalowana,
             "active": active,
@@ -463,6 +646,9 @@ class RefreshWorker(QThread):
             "webui": webui,
             "webui_autostart": webui_autostart,
             "webui_dziala": webui_dziala,
+            "litellm": litellm,
+            "litellm_autostart": litellm_autostart,
+            "litellm_dziala": litellm_dziala,
         })
 
 
@@ -512,6 +698,22 @@ class ActionWorker(QThread):
             self.zakonczono.emit(True, f"{self.opis}: OK")
         except Exception as e:
             self.zakonczono.emit(False, f"{self.opis}: błąd - {e}")
+
+
+class AgregatorWorker(QThread):
+    """Odpytuje na żywo hosty z listy serwerów o zainstalowane modele.
+
+    WHY: podgląd "co trafi do configu LiteLLM" wymaga /api/tags na KAŻDYM
+         hoście z listy - może potrwać, więc w tle jak każda inna sieć.
+    """
+    wynik = pyqtSignal(list)  # lista krotek (nazwa_hosta, model, adres)
+
+    def __init__(self, serwery):
+        super().__init__()
+        self.serwery = serwery
+
+    def run(self):
+        self.wynik.emit(_wykryj_modele_na_serwerach(self.serwery))
 
 
 # =============================================================================
@@ -600,6 +802,9 @@ class MainWindow(QMainWindow):
         self._webui_worker = None       # WHY: to samo dla instalacji/uruchomienia Open WebUI
         self._webui_zainstalowane = False  # WHY: potrzebne w klik_webui, żeby wiedzieć co robi przycisk
         self._webui_dziala = False         # WHY: jw. - odróżnia "Uruchom" od "Otwórz" w tym samym miejscu
+        self._litellm_worker = None     # WHY: to samo dla instalacji/uruchomienia LiteLLM
+        self._litellm_zainstalowany = False  # WHY: potrzebne w klik_litellm, żeby wiedzieć co robi przycisk
+        self._agregator_worker = None   # WHY: osobny wątek na podgląd modeli (zakładka "Agregator modeli")
         self._workers = []            # WHY: trzymamy referencje, by wątki nie zniknęły w trakcie
         self._ostatni_status = None   # WHY: żeby nie spamować logu tym samym statusem pull
 
@@ -618,8 +823,8 @@ class MainWindow(QMainWindow):
 
     # --- Budowa interfejsu ---
     def _buduj_ui(self):
-        # WHAT: pasek serwera + pasek statystyk na górze, pod nim 2 zakładki
-        #       (Usługi / Modele), dziennik na dole na całą szerokość.
+        # WHAT: pasek serwera + pasek statystyk na górze, pod nim 3 zakładki
+        #       (Usługi / Modele / Agregator modeli), dziennik na dole na całą szerokość.
         # WHY:  finalny układ po trzech podejściach w Claude Design - zakładki
         #       trzymają wysokość okna w ryzach (jedna zakładka = jeden ekran),
         #       a pasek statystyk daje podgląd stanu bez klikania w ogóle.
@@ -660,6 +865,7 @@ class MainWindow(QMainWindow):
         zakladki = QTabWidget()
         zakladki.addTab(self._zakladka_uslugi(), "Usługi")
         zakladki.addTab(self._zakladka_modele_lokalne(), "Modele")
+        zakladki.addTab(self._zakladka_agregator(), "Agregator modeli")
         layout.addWidget(zakladki, 1)
 
         # === Dziennik - na dole, pod zakładkami =========================
@@ -835,6 +1041,71 @@ class MainWindow(QMainWindow):
 
         return strona
 
+    def _zakladka_agregator(self):
+        # WHAT: karta sterowania usługą LiteLLM (instalacja/start/stop/autostart)
+        #       + karta z podglądem modeli, które trafią do jej configu.
+        # WHY:  hosty biorą się WPROST z listy serwerów (pasek u góry, ten sam
+        #       `self.serwery` co przełącznik) - żadnej drugiej listy hostów
+        #       do ręcznego utrzymywania w dwóch miejscach.
+        strona = QWidget()
+        layout = QVBoxLayout(strona)
+
+        karta_litellm = QGroupBox("LiteLLM")
+        uk_litellm = QVBoxLayout(karta_litellm)
+        self.lbl_litellm_status = QLabel("sprawdzam...")
+        uk_litellm.addLayout(
+            self._naglowek_sekcji("Jeden adres dla modeli z wielu serwerów Ollamy", self.lbl_litellm_status)
+        )
+        opis_litellm = QLabel(
+            "Wystawia jeden endpoint (zgodny z API OpenAI), za którym LiteLLM "
+            "kieruje zapytania do modeli na hostach z listy serwerów (pasek u "
+            "góry okna). Dzięki temu np. VS Code/Continue może korzystać z "
+            "modeli na kilku komputerach naraz, wskazując tylko na ten jeden adres."
+        )
+        opis_litellm.setWordWrap(True)
+        uk_litellm.addWidget(opis_litellm)
+        # WHAT: adres, który trzeba wpisać w kliencie (VS Code/Continue itp.),
+        #       zaznaczalny myszką do skopiowania - bez grzebania w kodzie po LITELLM_URL.
+        # WHY:  to jedyne miejsce w oknie, gdzie ten adres jest w ogóle pokazany -
+        #       bez niego użytkownik nie wie, gdzie właściwie podłączyć klienta.
+        lbl_litellm_adres = QLabel(f"Adres dla klientów (np. Continue): <b>{LITELLM_URL}/v1</b>")
+        lbl_litellm_adres.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        uk_litellm.addWidget(lbl_litellm_adres)
+        pasek_litellm = QHBoxLayout()
+        self.btn_litellm = QPushButton("sprawdzam...")
+        self.btn_litellm.clicked.connect(self.klik_litellm)
+        self.btn_litellm_stop = QPushButton("Zatrzymaj")
+        self.btn_litellm_stop.setEnabled(False)  # WHY: aktywny dopiero gdy LiteLLM faktycznie działa
+        self.btn_litellm_stop.clicked.connect(self.zatrzymaj_litellm)
+        pasek_litellm.addWidget(self.btn_litellm)
+        pasek_litellm.addWidget(self.btn_litellm_stop)
+        uk_litellm.addLayout(pasek_litellm)
+        # WHY: usługa --user, więc osobny checkbox od autostartu Ollamy (systemowego)
+        self.chk_litellm_autostart = QCheckBox("Uruchamiaj automatycznie po zalogowaniu")
+        self.chk_litellm_autostart.setEnabled(False)  # WHY: bez sensu, dopóki LiteLLM nie jest zainstalowane
+        self.chk_litellm_autostart.toggled.connect(self.przelacz_litellm_autostart)
+        uk_litellm.addWidget(self.chk_litellm_autostart)
+        layout.addWidget(karta_litellm)
+
+        karta_agregator = QGroupBox("Modele w agregatorze")
+        uk_agregator = QVBoxLayout(karta_agregator)
+        pasek_agregator = QHBoxLayout()
+        lbl_agregator = QLabel(
+            "Podgląd modeli i hostów, które trafią do configu LiteLLM - na "
+            "podstawie listy serwerów u góry okna."
+        )
+        lbl_agregator.setWordWrap(True)
+        pasek_agregator.addWidget(lbl_agregator, 1)
+        self.btn_odswiez_agregator = QPushButton("Odśwież listę")
+        self.btn_odswiez_agregator.clicked.connect(self.odswiez_liste_agregatora)
+        pasek_agregator.addWidget(self.btn_odswiez_agregator)
+        uk_agregator.addLayout(pasek_agregator)
+        self.lista_agregator = QListWidget()
+        uk_agregator.addWidget(self.lista_agregator)
+        layout.addWidget(karta_agregator, 1)
+
+        return strona
+
     # --- Przełącznik serwera ---
     def _wypelnij_combo_serwer(self):
         # WHY: blokujemy sygnały na czas wypełniania - inaczej samo dodawanie
@@ -978,6 +1249,30 @@ class MainWindow(QMainWindow):
         self.chk_webui_autostart.setChecked(stan["webui_autostart"])
         self.chk_webui_autostart.blockSignals(False)
 
+        # WHAT: jeden przycisk, dwa znaczenia - "Zainstaluj" / "Uruchom" - w
+        #       przeciwieństwie do WebUI nie ma tu trzeciego stanu "Otwórz",
+        #       bo LiteLLM to sam endpoint API, nie strona do oglądania.
+        self._litellm_zainstalowany = stan["litellm"]
+        self.lbl_litellm_status.setText("zainstalowane ✓" if stan["litellm"] else "nie zainstalowane ✗")
+        litellm_w_toku = bool(self._litellm_worker and self._litellm_worker.isRunning())
+        if litellm_w_toku:
+            self.btn_litellm.setEnabled(False)
+            self.btn_litellm_stop.setEnabled(False)
+        else:
+            if not stan["litellm"]:
+                self.btn_litellm.setText("Zainstaluj LiteLLM")
+            elif stan["litellm_dziala"]:
+                self.btn_litellm.setText("Uruchom ponownie")
+            else:
+                self.btn_litellm.setText("Uruchom LiteLLM")
+            self.btn_litellm.setEnabled(True)
+            self.btn_litellm_stop.setEnabled(stan["litellm"] and stan["litellm_dziala"])
+
+        self.chk_litellm_autostart.setEnabled(stan["litellm"])
+        self.chk_litellm_autostart.blockSignals(True)
+        self.chk_litellm_autostart.setChecked(stan["litellm_autostart"])
+        self.chk_litellm_autostart.blockSignals(False)
+
         # === Pasek statystyk ============================================
         # WHY: to jedyne miejsce w oknie ze statusem Ollamy - usunięty osobny
         #      pill w zakładce "Usługi", żeby nie dublować tej samej informacji.
@@ -1091,6 +1386,87 @@ class MainWindow(QMainWindow):
         opis = "Włączenie autostartu WebUI" if wlacz else "Wyłączenie autostartu WebUI"
         self.wpis_log(opis + "...")
         self._uruchom_akcje(lambda: webui_autostart(wlacz), opis)
+
+    # --- Agregator modeli (LiteLLM) ---
+    def klik_litellm(self):
+        if self._litellm_worker and self._litellm_worker.isRunning():
+            self.wpis_log("Operacja na LiteLLM już trwa - poczekaj na zakończenie.")
+            return
+
+        if not self._litellm_zainstalowany:
+            odp = QMessageBox.question(
+                self, "Zainstaluj LiteLLM",
+                "Zainstalować LiteLLM teraz?\n\n"
+                "Zainstaluje pakiet 'litellm[proxy]' przez uv, dla bieżącego użytkownika\n"
+                "(bez Dockera, bez uprawnień administratora - wymaga internetu).",
+            )
+            if odp != QMessageBox.StandardButton.Yes:
+                return
+            self.wpis_log("Instaluję LiteLLM - to może potrwać kilka minut...")
+            self.btn_litellm.setEnabled(False)
+            self._litellm_worker = self._uruchom_akcje(litellm_zainstaluj, "Instalacja LiteLLM")
+            return
+
+        # WHY: config.yaml generujemy tuż przed (re)startem z AKTUALNEJ listy
+        #      serwerów - dodanie/usunięcie hosta widać dopiero po tym kliknięciu.
+        self.wpis_log("Uruchamiam LiteLLM...")
+        self.btn_litellm.setEnabled(False)
+        worker = ActionWorker(lambda: litellm_uruchom(self.serwery), "Uruchomienie LiteLLM")
+        self._litellm_worker = worker
+        self._workers.append(worker)
+
+        def _po_uruchomieniu(sukces, komunikat, w=worker):
+            self.wpis_log(komunikat)
+            if sukces:
+                # WHY: przypomnienie w dzienniku, gdzie podłączyć klienta -
+                #      łatwiej znaleźć w logu niż wracać do zakładki po adres.
+                self.wpis_log(f"Adres dla klientów (np. Continue): {LITELLM_URL}/v1")
+            if w in self._workers:
+                self._workers.remove(w)
+            QTimer.singleShot(1200, self.odswiez)
+
+        worker.zakonczono.connect(_po_uruchomieniu)
+        worker.start()
+
+    def zatrzymaj_litellm(self):
+        if self._litellm_worker and self._litellm_worker.isRunning():
+            self.wpis_log("Operacja na LiteLLM już trwa - poczekaj na zakończenie.")
+            return
+        self.wpis_log("Zatrzymuję LiteLLM...")
+        self._litellm_worker = self._uruchom_akcje(litellm_zatrzymaj, "Zatrzymanie LiteLLM")
+
+    def przelacz_litellm_autostart(self, wlacz):
+        # WHY: jw. co przy WebUI - usługa --user, ale i tak przez _uruchom_akcje (blokujące I/O).
+        opis = "Włączenie autostartu LiteLLM" if wlacz else "Wyłączenie autostartu LiteLLM"
+        self.wpis_log(opis + "...")
+        self._uruchom_akcje(lambda: litellm_autostart(wlacz, self.serwery), opis)
+
+    def odswiez_liste_agregatora(self):
+        # WHAT: na żądanie (nie co 10 s razem z resztą) odpytuje /api/tags na
+        #       każdym hoście z listy serwerów - pokazuje, co realnie trafi
+        #       do configu LiteLLM przy następnym uruchomieniu.
+        # WHY:  osobny przycisk zamiast robić to w RefreshWorker - inaczej
+        #       każde odświeżenie stanu (co 10 s) pytałoby wszystkie hosty,
+        #       nawet gdy nikt nie patrzy akurat na tę zakładkę.
+        if self._agregator_worker and self._agregator_worker.isRunning():
+            return
+        self.lista_agregator.clear()
+        self.lista_agregator.addItem("Sprawdzam hosty...")
+        self.btn_odswiez_agregator.setEnabled(False)
+        worker = AgregatorWorker(self.serwery)
+        self._agregator_worker = worker
+
+        def _po_sprawdzeniu(wpisy, w=worker):
+            self.btn_odswiez_agregator.setEnabled(True)
+            self.lista_agregator.clear()
+            if not wpisy:
+                self.lista_agregator.addItem("Brak dostępnych modeli (hosty nieosiągalne albo puste).")
+                return
+            for nazwa_hosta, model, adres in wpisy:
+                self.lista_agregator.addItem(f"{model}  —  {nazwa_hosta} ({adres})")
+
+        worker.wynik.connect(_po_sprawdzeniu)
+        worker.start()
 
     # --- Modele ---
     def _wybrany_model(self):

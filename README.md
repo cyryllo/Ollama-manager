@@ -8,7 +8,7 @@ pod KDE — bez terminala, bez Dockera. Wszystko działa lokalnie, w Twoim LAN.
 - Python 3 + **PyQt6**, **requests**
 - **systemd** + **polkit** (`pkexec`) — standard na KDE/Debian
 - Ollama (jeśli jej nie masz, aplikacja sama ją zainstaluje jednym przyciskiem)
-- Opcjonalnie: **uv** (do instalacji Open WebUI — aplikacja doinstaluje je sama w razie potrzeby)
+- Opcjonalnie: **uv** (do instalacji Open WebUI i LiteLLM — aplikacja doinstaluje je sama w razie potrzeby)
 - Opcjonalnie: `ffmpeg`, `pandoc`, `zstd` (pełna funkcjonalność Open WebUI — głos, dokumenty w RAG)
 
 ## Instalacja i uruchomienie
@@ -48,6 +48,12 @@ python3 ollama_manager.py
 - Wybór hosta Ollama (localhost albo dowolny w LAN, np. BC-250) dla operacji na modelach
 - Dodawanie/usuwanie serwerów z poziomu okna, zapamiętywane między uruchomieniami
 
+**Agregator modeli (LiteLLM)**
+- Instalacja, start/stop i autostart LiteLLM jednym przyciskiem (bez Dockera)
+- Wystawia jeden endpoint (zgodny z API OpenAI) łączący modele ze WSZYSTKICH
+  serwerów z listy przełącznika — VS Code/Continue wskazuje tylko na ten adres
+- Podgląd, jakie modele i hosty trafią do configu, przed uruchomieniem
+
 **Pasek statystyk**
 - Status Ollamy i Open WebUI
 - Zużycie VRAM na aktualnie wybranym serwerze
@@ -59,4 +65,3 @@ python3 ollama_manager.py
 
 - Sterowanie usługą Ollama zawsze dotyczy lokalnej maszyny — nawet jeśli w oknie
   wybrany jest zdalny serwer (np. BC-250), start/stop/autostart działają lokalnie.
-- Nazwa usługi systemd to stała na górze `ollama_manager.py` (`SERVICE_NAME`).
