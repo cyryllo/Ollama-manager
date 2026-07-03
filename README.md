@@ -39,24 +39,24 @@ python3 ollama_manager.py
 - Pobieranie nowych modeli z podpowiedziami popularnych (Llama, Gemma, Mistral, Phi, DeepSeek, Qwen) i paskiem postępu
 - Podgląd modeli aktualnie załadowanych do pamięci (VRAM)
 
-**Modele zdalne**
-- Kreator dodawania modeli zdalnych (RemoteHost) — np. podpięcie serwera BC-250 pod jedną lokalną Ollamę
-- Osobna lista modeli utworzonych w ten sposób
-
 **Open WebUI**
 - Instalacja panelu czatu w przeglądarce jednym przyciskiem (bez Dockera)
 - Start / stop, autostart po zalogowaniu
-- Otwiera się automatycznie w przeglądarce po uruchomieniu
+- Przycisk "Otwórz WebUI" otwiera panel w przeglądarce (bez automatycznego otwierania)
+
+**Przełącznik serwera**
+- Wybór hosta Ollama (localhost albo dowolny w LAN, np. BC-250) dla operacji na modelach
+- Dodawanie/usuwanie serwerów z poziomu okna, zapamiętywane między uruchomieniami
 
 **Pasek statystyk**
 - Status Ollamy i Open WebUI
-- Zużycie VRAM lokalnie i na hostach zdalnych
+- Zużycie VRAM na aktualnie wybranym serwerze
 - Liczba zainstalowanych modeli
 
 **Dziennik zdarzeń** — log wszystkich operacji, zawsze widoczny na dole okna.
 
 ## Uwagi
 
-- Sterowanie usługą Ollama zawsze dotyczy lokalnej maszyny — nawet jeśli aplikacja
-  wskazuje na zdalny serwer (np. BC-250), start/stop/autostart działają lokalnie.
-- Adres serwera Ollamy i nazwa usługi to stałe na górze `ollama_manager.py`.
+- Sterowanie usługą Ollama zawsze dotyczy lokalnej maszyny — nawet jeśli w oknie
+  wybrany jest zdalny serwer (np. BC-250), start/stop/autostart działają lokalnie.
+- Nazwa usługi systemd to stała na górze `ollama_manager.py` (`SERVICE_NAME`).

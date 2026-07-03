@@ -18,31 +18,29 @@
 import sys
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
 import time
 from pathlib import Path
-from urllib.parse import urlparse
 
 import requests  # WHY: czytelniejsze od urllib przy strumieniowaniu /api/pull
 
-from PyQt6.QtCore import QThread, pyqtSignal, QTimer, QUrl
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QUrl, QSettings
 from PyQt6.QtGui import QIcon, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QListWidget, QProgressBar, QTabWidget,
+    QLabel, QPushButton, QListWidget, QListWidgetItem, QProgressBar, QTabWidget,
     QGroupBox,
     QPlainTextEdit, QComboBox, QMessageBox, QCheckBox,
-    QDialog, QFormLayout, QLineEdit, QDialogButtonBox,
+    QDialog, QLineEdit,
 )
 
 # --- Konfiguracja ---------------------------------------------------------
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.3.2"
+WERSJA = "0.3.3"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -76,6 +74,52 @@ POLECANE_MODELE = [
     "qwen2.5-coder:1.5b",
     "nomic-embed-text",  # embeddingi (RAG, wyszukiwanie semantyczne)
 ]
+
+
+# =============================================================================
+#  Serwery Ollama - lista do przełącznika w oknie (localhost / hosty w LAN)
+# =============================================================================
+# WHAT: edytowalna lista adresów, między którymi można przełączać się z okna,
+#       zamiast raz na zawsze edytować stałą OLLAMA_URL.
+# WHY:  jedyny realny sposób na "wiele instancji Ollamy" to zwykłe wskazanie
+#       klientowi innego adresu API (patrz CLAUDE.md, sekcja "Modele zdalne") -
+#       dyrektywy Modelfile typu REMOTE_HOST nie istnieją. Przełącznik dotyczy
+#       TYLKO operacji na modelach (lista/pobierz/usuń/VRAM) - sterowanie
+#       usługą systemd zawsze zostaje lokalne, więc nie jest tu uwzględnione.
+DOMYSLNY_SERWER = {"nazwa": "Lokalny", "adres": OLLAMA_URL}
+
+
+def _ustawienia():
+    # WHAT: jeden wspólny obiekt QSettings (plik INI w ~/.config).
+    return QSettings("OllamaManager", "OllamaManager")
+
+
+def _wczytaj_serwery():
+    # WHAT: lista serwerów zapisana jako JSON w ustawieniach.
+    # WHY:  QSettings nie zna list słowników wprost - zapisujemy jako tekst.
+    surowe = _ustawienia().value("serwery/lista", "")
+    if surowe:
+        try:
+            lista = json.loads(surowe)
+            if lista:
+                return lista
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return [dict(DOMYSLNY_SERWER)]
+
+
+def _zapisz_serwery(lista):
+    _ustawienia().setValue("serwery/lista", json.dumps(lista))
+
+
+def _wczytaj_serwer_aktywny(serwery):
+    # WHY: jeśli zapisany adres zniknął z listy (usunięty ręcznie), wracamy na pierwszy.
+    adres = _ustawienia().value("serwery/aktywny", "")
+    return adres if adres in [s["adres"] for s in serwery] else serwery[0]["adres"]
+
+
+def _zapisz_serwer_aktywny(adres):
+    _ustawienia().setValue("serwery/aktywny", adres)
 
 
 # =============================================================================
@@ -135,112 +179,6 @@ def ollama_zainstaluj():
     # UWAGA: adres to oficjalna, udokumentowana metoda instalacji z ollama.com/download -
     #        warto od czasu do czasu sprawdzić, czy się nie zmieniła.
     _pkexec(["sh", "-c", "curl -fsSL https://ollama.com/install.sh | sh"])
-
-
-def _wyciagnij_host(adres):
-    # WHAT: z adresu (sam host, host:port albo pełny URL) wyciąga goły hostname/IP.
-    # WHY:  użytkownik naturalnie wpisze adres w stylu OLLAMA_URL
-    #       (np. "http://192.168.0.236:11434"), a biała lista OLLAMA_REMOTES
-    #       chce samego hosta, bez schematu i portu.
-    adres = adres.strip()
-    if "://" not in adres:
-        adres = "http://" + adres  # WHY: urlparse potrzebuje schematu, żeby rozdzielić host od portu
-    host = urlparse(adres).hostname
-    if not host:
-        raise ValueError(f"Nie rozpoznaję hosta w adresie: {adres}")
-    return host
-
-
-def _obecne_remote_hosty():
-    # WHAT: czyta aktualną białą listę OLLAMA_REMOTES z uruchomionej usługi.
-    # WHY:  nieuprzywilejowane zapytanie (jak _systemctl_query) - potrzebne,
-    #       żeby nie dublować hosta i nie restartować usługi bez potrzeby.
-    r = subprocess.run(
-        ["systemctl", "show", SERVICE_NAME, "--property=Environment"],
-        capture_output=True, text=True, timeout=3,
-    )
-    dopasowanie = re.search(r"OLLAMA_REMOTES=(\S+)", r.stdout)
-    return dopasowanie.group(1).split(",") if dopasowanie else []
-
-
-def _stats_zdalne_hosty():
-    # WHAT: hosty z OLLAMA_REMOTES minus "ollama.com" - to domyślny wpis
-    #       whitelisty, nie prawdziwy serwer Ollamy w LAN, więc nie ma go co pytać o VRAM.
-    return [h for h in _obecne_remote_hosty() if h and h != "ollama.com"]
-
-
-def pobierz_vram_zdalnego(host):
-    # WHAT: pyta zdalny host o /api/ps (modele załadowane do jego VRAM/RAM).
-    # WHY:  modele zdalne (RemoteHost) liczą się na GPU tamtej maszyny (np. BC-250) -
-    #       pasek statystyk pokazuje to osobno od VRAM-u lokalnego.
-    # UWAGA: zakłada domyślny port Ollamy (11434) na hoście zdalnym.
-    try:
-        r = requests.get(f"http://{host}:11434/api/ps", timeout=2)
-        r.raise_for_status()
-        return r.json().get("models", [])
-    except requests.RequestException:
-        return None  # WHY: None = host nieosiągalny, odróżniamy od "0 modeli w pamięci"
-
-
-def usluga_dodaj_remote_host(host):
-    # WHAT: dopisuje host do białej listy OLLAMA_REMOTES usługi i ją restartuje.
-    # WHY:  bez wpisu na liście lokalna Ollama odrzuci proxowanie do zdalnego
-    #       hosta (domyślnie dozwolony jest tylko ollama.com) - patrz CLAUDE.md.
-    if not re.fullmatch(r"[A-Za-z0-9.\-]+", host):
-        raise ValueError(f"Nieprawidłowa nazwa hosta: {host}")
-
-    obecne = _obecne_remote_hosty()
-    if host in obecne:
-        return  # WHY: już na liście - nie ma co restartować usługi bez potrzeby
-
-    tresc = f'[Service]\nEnvironment="OLLAMA_REMOTES={",".join(obecne + [host])}"\n'
-    with tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False) as f:
-        f.write(tresc)
-        tmp_path = f.name
-    try:
-        docelowy = f"/etc/systemd/system/{SERVICE_NAME}.service.d/override.conf"
-        # WHY: jeden pkexec zamiast trzech osobnych (install/reload/restart) -
-        #      mniej okienek z hasłem. $1/$2 to argumenty powłoki, a nie
-        #      interpolacja stringów, więc dane od użytkownika (host) nie
-        #      trafiają bezpośrednio do treści polecenia - trafiają tylko
-        #      do zawartości pliku tymczasowego, którą i tak zwalidowano wyżej.
-        skrypt = f'install -Dm644 "$1" "$2" && systemctl daemon-reload && systemctl restart {SERVICE_NAME}'
-        _pkexec(["sh", "-c", skrypt, "_", tmp_path, docelowy])
-    finally:
-        os.remove(tmp_path)
-
-
-def dodaj_model_zdalny(host, remote_host_url, remote_model, nazwa_lokalna):
-    # WHAT: pełny przepis z sekcji "Modele zdalne" w CLAUDE.md, zautomatyzowany:
-    #       1) dopisuje host do OLLAMA_REMOTES i restartuje usługę (wymaga roota),
-    #       2) generuje Modelfile i tworzy lokalny model-skrót przez 'ollama create'
-    #          (nie wymaga roota - rozmawia z lokalnym demonem jako zwykły użytkownik).
-    usluga_dodaj_remote_host(host)
-
-    # WHY: usługa mogła się właśnie zrestartować - dajemy jej chwilę na start,
-    #      zanim 'ollama create' spróbuje się z nią połączyć.
-    for _ in range(10):
-        if _systemctl_query("is-active") == "active":
-            break
-        time.sleep(1)
-
-    modelfile = (
-        "FROM ollama/base\n"
-        f"REMOTE_HOST {remote_host_url}\n"
-        f"REMOTE_MODEL {remote_model}\n"
-    )
-    with tempfile.NamedTemporaryFile("w", suffix=".Modelfile", delete=False) as f:
-        f.write(modelfile)
-        tmp_path = f.name
-    try:
-        wynik = subprocess.run(
-            ["ollama", "create", nazwa_lokalna, "-f", tmp_path],
-            capture_output=True, text=True, timeout=120,
-        )
-        if wynik.returncode != 0:
-            raise RuntimeError(wynik.stderr.strip() or "ollama create: nieznany błąd")
-    finally:
-        os.remove(tmp_path)
 
 
 # =============================================================================
@@ -461,29 +399,6 @@ class OllamaClient:
         except requests.RequestException:
             return []
 
-    def show_model(self, name):
-        # WHAT: szczegóły pojedynczego modelu - m.in. czy ma ustawiony REMOTE_HOST.
-        # WHY:  /api/tags nie mówi, które modele są zdalnymi proxy; trzeba spytać
-        #       /api/show osobno dla każdego. Krótki timeout - to leci N razy pod rząd.
-        try:
-            r = requests.post(f"{self.base_url}/api/show", json={"model": name}, timeout=3)
-            r.raise_for_status()
-            return r.json()
-        except requests.RequestException:
-            return {}
-
-    def list_remote_models(self):
-        # WHAT: filtruje zainstalowane modele do tych stworzonych przez
-        #       REMOTE_HOST/REMOTE_MODEL (patrz CLAUDE.md, sekcja "Modele zdalne").
-        # WHY:  osobna zakładka w GUI pokazuje tylko te, nie wszystkie modele.
-        zdalne = []
-        for nazwa in self.list_models():
-            info = self.show_model(nazwa)
-            host = info.get("remote_host")
-            if host:
-                zdalne.append((nazwa, host, info.get("remote_model", "?")))
-        return zdalne
-
     def delete_model(self, name):
         # WHAT: usuwa model z dysku przez API.
         # WHY:  używamy API (a nie 'ollama rm'), bo działa też gdy OLLAMA_URL
@@ -538,25 +453,6 @@ class RefreshWorker(QThread):
         #      pasek statystyk ma pokazywać żywy stan, nie tylko obecność binarki.
         webui_dziala = _webui_dziala()
 
-        # WHAT: modele z REMOTE_HOST (osobna zakładka) - wymaga /api/show na
-        #       każdym zainstalowanym modelu, więc robimy to tylko gdy API żyje.
-        zdalne_modele = self.client.list_remote_models() if api else []
-
-        # WHAT: pasek statystyk - VRAM zdalny to suma z /api/ps na KAŻDYM
-        #       hoście z białej listy OLLAMA_REMOTES (poza ollama.com).
-        # WHY:  osobne od VRAM-u lokalnego - to zużycie karty na innej maszynie (BC-250).
-        vram_zdalnie = 0
-        zaladowane_zdalnie = 0
-        hosty_nieosiagalne = 0
-        zdalne_hosty = _stats_zdalne_hosty()
-        for host in zdalne_hosty:
-            wynik_hosta = pobierz_vram_zdalnego(host)
-            if wynik_hosta is None:
-                hosty_nieosiagalne += 1
-                continue
-            zaladowane_zdalnie += len(wynik_hosta)
-            vram_zdalnie += sum(m.get("size_vram", 0) for m in wynik_hosta)
-
         self.wynik.emit({
             "zainstalowana": zainstalowana,
             "active": active,
@@ -567,11 +463,6 @@ class RefreshWorker(QThread):
             "webui": webui,
             "webui_autostart": webui_autostart,
             "webui_dziala": webui_dziala,
-            "zdalne_modele": zdalne_modele,
-            "zdalne_hosty_liczba": len(zdalne_hosty),
-            "zdalne_hosty_nieosiagalne": hosty_nieosiagalne,
-            "vram_zdalnie_bajty": vram_zdalnie,
-            "zaladowane_zdalnie_liczba": zaladowane_zdalnie,
         })
 
 
@@ -624,41 +515,74 @@ class ActionWorker(QThread):
 
 
 # =============================================================================
-#  Kreator dodawania modelu zdalnego (RemoteHost/RemoteModel)
+#  Zarządzanie listą serwerów (dialog otwierany z paska w głównym oknie)
 # =============================================================================
-class DialogModelZdalny(QDialog):
-    """Formularz z trzema polami potrzebnymi do przepisu z CLAUDE.md:
-    adres zdalnej Ollamy, nazwa modelu na niej i lokalna nazwa-skrót.
-    """
+class DialogZarzadzajSerwerami(QDialog):
+    """Dodawanie/usuwanie wpisów z listy serwerów Ollama do przełącznika."""
 
-    def __init__(self, parent=None):
+    def __init__(self, serwery, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Dodaj model zdalny")
-        layout = QFormLayout(self)
+        self.setWindowTitle("Zarządzaj serwerami")
+        self.setMinimumWidth(420)
+        # WHY: kopia robocza - lista trafia do wywołującego dopiero po zamknięciu.
+        self.serwery = [dict(s) for s in serwery]
 
-        self.pole_adres = QLineEdit("http://192.168.0.236:11434")
-        self.pole_model = QLineEdit()
-        self.pole_model.setPlaceholderText("np. qwen2.5-coder:14b")
+        layout = QVBoxLayout(self)
+
+        self.lista = QListWidget()
+        layout.addWidget(self.lista)
+
+        pasek_usun = QHBoxLayout()
+        pasek_usun.addStretch(1)
+        btn_usun = QPushButton("Usuń zaznaczony")
+        btn_usun.clicked.connect(self._usun)
+        pasek_usun.addWidget(btn_usun)
+        layout.addLayout(pasek_usun)
+
+        formularz = QHBoxLayout()
         self.pole_nazwa = QLineEdit()
-        self.pole_nazwa.setPlaceholderText("np. qwen-14b-bc250")
+        self.pole_nazwa.setPlaceholderText("Nazwa (np. BC-250)")
+        self.pole_adres = QLineEdit()
+        self.pole_adres.setPlaceholderText("Adres (np. http://192.168.0.236:11434)")
+        btn_dodaj = QPushButton("Dodaj")
+        btn_dodaj.clicked.connect(self._dodaj)
+        formularz.addWidget(self.pole_nazwa)
+        formularz.addWidget(self.pole_adres, 1)
+        formularz.addWidget(btn_dodaj)
+        layout.addLayout(formularz)
 
-        layout.addRow("Adres zdalnego hosta:", self.pole_adres)
-        layout.addRow("Nazwa modelu na zdalnym hoście:", self.pole_model)
-        layout.addRow("Nazwa lokalna (skrót):", self.pole_nazwa)
+        btn_zamknij = QPushButton("Zamknij")
+        btn_zamknij.clicked.connect(self.accept)
+        layout.addWidget(btn_zamknij, alignment=Qt.AlignmentFlag.AlignRight)
 
-        przyciski = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        przyciski.accepted.connect(self.accept)
-        przyciski.rejected.connect(self.reject)
-        layout.addRow(przyciski)
+        self._odswiez_liste()
 
-    def dane(self):
-        return (
-            self.pole_adres.text().strip(),
-            self.pole_model.text().strip(),
-            self.pole_nazwa.text().strip(),
-        )
+    def _odswiez_liste(self):
+        self.lista.clear()
+        for s in self.serwery:
+            self.lista.addItem(f"{s['nazwa']}  —  {s['adres']}")
+
+    def _dodaj(self):
+        nazwa = self.pole_nazwa.text().strip()
+        adres = self.pole_adres.text().strip().rstrip("/")
+        if not nazwa or not adres:
+            QMessageBox.warning(self, "Brak danych", "Podaj nazwę i adres serwera.")
+            return
+        self.serwery.append({"nazwa": nazwa, "adres": adres})
+        self.pole_nazwa.clear()
+        self.pole_adres.clear()
+        self._odswiez_liste()
+
+    def _usun(self):
+        wiersz = self.lista.currentRow()
+        if wiersz < 0:
+            return
+        # WHY: przełącznik zawsze potrzebuje przynajmniej jednej pozycji do wyboru.
+        if len(self.serwery) <= 1:
+            QMessageBox.warning(self, "Nie można usunąć", "Musi zostać co najmniej jeden serwer.")
+            return
+        del self.serwery[wiersz]
+        self._odswiez_liste()
 
 
 # =============================================================================
@@ -667,12 +591,15 @@ class DialogModelZdalny(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.client = OllamaClient()
+        self.serwery = _wczytaj_serwery()
+        self._serwer_aktywny_adres = _wczytaj_serwer_aktywny(self.serwery)
+        self.client = OllamaClient(base_url=self._serwer_aktywny_adres)
         self.pull_worker = None
         self.refresh_worker = None
         self._instalacja_worker = None  # WHY: osobne śledzenie, żeby nie odpalić instalacji 2x naraz
         self._webui_worker = None       # WHY: to samo dla instalacji/uruchomienia Open WebUI
         self._webui_zainstalowane = False  # WHY: potrzebne w klik_webui, żeby wiedzieć co robi przycisk
+        self._webui_dziala = False         # WHY: jw. - odróżnia "Uruchom" od "Otwórz" w tym samym miejscu
         self._workers = []            # WHY: trzymamy referencje, by wątki nie zniknęły w trakcie
         self._ostatni_status = None   # WHY: żeby nie spamować logu tym samym statusem pull
 
@@ -684,8 +611,6 @@ class MainWindow(QMainWindow):
 
         # WHAT: cykliczne odświeżanie co 10 s.
         # WHY:  stan usługi/API może zmienić się poza aplikacją (terminal, reboot).
-        #       10 s zamiast 5 s - odświeżenie robi teraz więcej zapytań
-        #       sieciowych (/api/show na każdy model, /api/ps na każdy zdalny host).
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.odswiez)
         self.timer.start(10000)
@@ -693,8 +618,8 @@ class MainWindow(QMainWindow):
 
     # --- Budowa interfejsu ---
     def _buduj_ui(self):
-        # WHAT: pasek statystyk na górze, pod nim 3 zakładki (Usługi / Modele
-        #       lokalne / Modele zdalne), dziennik na dole na całą szerokość.
+        # WHAT: pasek serwera + pasek statystyk na górze, pod nim 2 zakładki
+        #       (Usługi / Modele lokalne), dziennik na dole na całą szerokość.
         # WHY:  finalny układ po trzech podejściach w Claude Design - zakładki
         #       trzymają wysokość okna w ryzach (jedna zakładka = jeden ekran),
         #       a pasek statystyk daje podgląd stanu bez klikania w ogóle.
@@ -703,15 +628,28 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(centralny)
         layout = QVBoxLayout(centralny)
 
+        # === Pasek serwera ===============================================
+        # WHY: przełącza, do którego hosta Ollama idą operacje na modelach
+        #      (lista/pobierz/usuń/VRAM) - bez edycji stałej OLLAMA_URL.
+        #      Sterowanie USŁUGĄ (start/stop/autostart) zawsze zostaje lokalne.
+        pasek_serwer = QHBoxLayout()
+        pasek_serwer.addWidget(QLabel("Serwer:"))
+        self.combo_serwer = QComboBox()
+        self.combo_serwer.currentIndexChanged.connect(self._zmien_serwer)
+        pasek_serwer.addWidget(self.combo_serwer, 1)
+        btn_zarzadzaj_serwerami = QPushButton("Zarządzaj serwerami...")
+        btn_zarzadzaj_serwerami.clicked.connect(self._zarzadzaj_serwerami)
+        pasek_serwer.addWidget(btn_zarzadzaj_serwerami)
+        layout.addLayout(pasek_serwer)
+        self._wypelnij_combo_serwer()
+
         # === Pasek statystyk ============================================
         pasek_staty = QHBoxLayout()
         kafelek, self.lbl_stat_ollama = self._kafelek_stat("OLLAMA")
         pasek_staty.addWidget(kafelek)
         kafelek, self.lbl_stat_webui = self._kafelek_stat("WEBUI")
         pasek_staty.addWidget(kafelek)
-        kafelek, self.lbl_stat_vram_lokalnie = self._kafelek_stat("VRAM LOKALNIE")
-        pasek_staty.addWidget(kafelek)
-        kafelek, self.lbl_stat_vram_zdalnie = self._kafelek_stat("VRAM ZDALNIE")
+        kafelek, self.lbl_stat_vram_lokalnie = self._kafelek_stat("VRAM")
         pasek_staty.addWidget(kafelek)
         kafelek, self.lbl_stat_modele = self._kafelek_stat("MODELE")
         pasek_staty.addWidget(kafelek)
@@ -722,7 +660,6 @@ class MainWindow(QMainWindow):
         zakladki = QTabWidget()
         zakladki.addTab(self._zakladka_uslugi(), "Usługi")
         zakladki.addTab(self._zakladka_modele_lokalne(), "Modele lokalne")
-        zakladki.addTab(self._zakladka_modele_zdalne(), "Modele zdalne")
         layout.addWidget(zakladki, 1)
 
         # === Dziennik - na dole, pod zakładkami =========================
@@ -864,12 +801,14 @@ class MainWindow(QMainWindow):
         pasek_pull.addWidget(self.btn_pull)
         uk_pobierz.addLayout(pasek_pull)
 
-        # WHAT: link do pełnej listy modeli na stronie Ollamy.
+        # WHAT: krótkie wyjaśnienie, skąd wziąć nazwę modelu do pobrania.
         # WHY:  powyższa lista to tylko garść popularnych modeli - reszta jest
         #       na ollama.com/library, skąd można skopiować dowolną nazwę.
         lbl_link = QLabel(
-            'Więcej modeli: <a href="https://ollama.com/library">ollama.com/library</a>'
+            'Sprawdź dostępne modele na <a href="https://ollama.com/library">'
+            "ollama.com/library</a>, wpisz nazwę w polu powyżej i kliknij Pobierz."
         )
+        lbl_link.setWordWrap(True)
         lbl_link.setOpenExternalLinks(True)
         uk_pobierz.addWidget(lbl_link)
 
@@ -896,38 +835,44 @@ class MainWindow(QMainWindow):
 
         return strona
 
-    def _zakladka_modele_zdalne(self):
-        # WHAT: dwie kolumny - lewa: dodawanie modeli zdalnych (RemoteHost);
-        #       prawa: lista tych już utworzonych, na całą wysokość zakładki.
-        # WHY:  lista jest PRZEFILTROWANA (tylko modele z ustawionym REMOTE_HOST,
-        #       sprawdzanym przez /api/show) - odróżnia je od zwykłych, lokalnych
-        #       modeli w zakładce "Modele lokalne".
-        strona = QWidget()
-        layout = QVBoxLayout(strona)
+    # --- Przełącznik serwera ---
+    def _wypelnij_combo_serwer(self):
+        # WHY: blokujemy sygnały na czas wypełniania - inaczej samo dodawanie
+        #      pozycji odpaliłoby _zmien_serwer() i niepotrzebny wpis w logu.
+        self.combo_serwer.blockSignals(True)
+        self.combo_serwer.clear()
+        aktywny_index = 0
+        for i, s in enumerate(self.serwery):
+            self.combo_serwer.addItem(f"{s['nazwa']} ({s['adres']})", s["adres"])
+            if s["adres"] == self._serwer_aktywny_adres:
+                aktywny_index = i
+        self.combo_serwer.setCurrentIndex(aktywny_index)
+        self.combo_serwer.blockSignals(False)
 
-        kolumny = QHBoxLayout()
-        layout.addLayout(kolumny, 1)
+    def _zmien_serwer(self, index):
+        if index < 0:
+            return
+        adres = self.combo_serwer.itemData(index)
+        if not adres or adres == self.client.base_url:
+            return
+        self.client.base_url = adres
+        self._serwer_aktywny_adres = adres
+        _zapisz_serwer_aktywny(adres)
+        self.wpis_log(f"Przełączono na serwer: {self.combo_serwer.itemText(index)}")
+        self.odswiez()
 
-        # --- Lewa kolumna: Dodaj model zdalny ---
-        karta_dodaj = QGroupBox("Dodaj model zdalny")
-        uk_dodaj = QVBoxLayout(karta_dodaj)
-        opis_remote = QLabel("Podepnij zdalny host (np. BC-250) pod lokalną Ollamę.")
-        opis_remote.setWordWrap(True)
-        uk_dodaj.addWidget(opis_remote)
-        self.btn_dodaj_remote = QPushButton("Dodaj model zdalny...")
-        self.btn_dodaj_remote.clicked.connect(self.dodaj_model_zdalny_dialog)
-        uk_dodaj.addWidget(self.btn_dodaj_remote)
-        uk_dodaj.addStretch(1)  # WHY: karta trzyma się góry lewej kolumny
-        kolumny.addWidget(karta_dodaj, 1)
-
-        # --- Prawa kolumna: Modele z REMOTE_HOST ---
-        karta_lista = QGroupBox("Modele z REMOTE_HOST")
-        uk_lista = QVBoxLayout(karta_lista)
-        self.lista_modele_zdalne = QListWidget()
-        uk_lista.addWidget(self.lista_modele_zdalne)
-        kolumny.addWidget(karta_lista, 1)
-
-        return strona
+    def _zarzadzaj_serwerami(self):
+        dialog = DialogZarzadzajSerwerami(self.serwery, self)
+        dialog.exec()
+        self.serwery = dialog.serwery
+        _zapisz_serwery(self.serwery)
+        # WHY: jeśli aktywny adres zniknął z listy (usunięty w dialogu), wracamy na pierwszy.
+        if self._serwer_aktywny_adres not in [s["adres"] for s in self.serwery]:
+            self._serwer_aktywny_adres = self.serwery[0]["adres"]
+            self.client.base_url = self._serwer_aktywny_adres
+            _zapisz_serwer_aktywny(self._serwer_aktywny_adres)
+        self._wypelnij_combo_serwer()
+        self.odswiez()
 
     # --- Pomocnicze ---
     def wpis_log(self, tekst):
@@ -1005,18 +950,24 @@ class MainWindow(QMainWindow):
             vram_gb = m.get("size_vram", 0) / (1024 ** 3)
             self.lista_zaladowane.addItem(f"{nazwa}  —  {vram_gb:.1f} GB VRAM")
 
-        # WHAT: jeden przycisk, dwa znaczenia - "Zainstaluj" albo "Uruchom",
-        #       zależnie od tego, czy binarka open-webui już tu jest. Drugi
-        #       przycisk ("Zatrzymaj") aktywny tylko gdy WebUI faktycznie działa.
+        # WHAT: jeden przycisk, trzy znaczenia - "Zainstaluj" / "Uruchom" / "Otwórz",
+        #       zależnie od tego, czy binarka jest zainstalowana i czy WebUI
+        #       już odpowiada. Drugi przycisk ("Zatrzymaj") aktywny tylko gdy działa.
         self._webui_zainstalowane = stan["webui"]
+        self._webui_dziala = stan["webui_dziala"]
         self.lbl_webui_status.setText("zainstalowane ✓" if stan["webui"] else "nie zainstalowane ✗")
         webui_w_toku = bool(self._webui_worker and self._webui_worker.isRunning())
         if webui_w_toku:
             self.btn_webui.setEnabled(False)
             self.btn_webui_stop.setEnabled(False)
         else:
-            self.btn_webui.setText("Uruchom WebUI" if stan["webui"] else "Zainstaluj WebUI")
-            self.btn_webui.setEnabled(not stan["webui_dziala"])
+            if not stan["webui"]:
+                self.btn_webui.setText("Zainstaluj WebUI")
+            elif stan["webui_dziala"]:
+                self.btn_webui.setText("Otwórz WebUI")
+            else:
+                self.btn_webui.setText("Uruchom WebUI")
+            self.btn_webui.setEnabled(True)
             self.btn_webui_stop.setEnabled(stan["webui"] and stan["webui_dziala"])
 
         # WHY: bez sensu włączać autostart czegoś, co nie jest zainstalowane;
@@ -1026,11 +977,6 @@ class MainWindow(QMainWindow):
         self.chk_webui_autostart.blockSignals(True)
         self.chk_webui_autostart.setChecked(stan["webui_autostart"])
         self.chk_webui_autostart.blockSignals(False)
-
-        # Odśwież listę modeli zdalnych (REMOTE_HOST) w zakładce "Modele zdalne"
-        self.lista_modele_zdalne.clear()
-        for nazwa, host, model_zdalny in stan["zdalne_modele"]:
-            self.lista_modele_zdalne.addItem(f"{nazwa}  →  {model_zdalny} @ {host}")
 
         # === Pasek statystyk ============================================
         # WHY: to jedyne miejsce w oknie ze statusem Ollamy - usunięty osobny
@@ -1048,16 +994,6 @@ class MainWindow(QMainWindow):
 
         vram_lokalnie_gb = sum(m.get("size_vram", 0) for m in stan["zaladowane"]) / (1024 ** 3)
         self.lbl_stat_vram_lokalnie.setText(f"{vram_lokalnie_gb:.1f} GB ({len(stan['zaladowane'])})")
-
-        if stan["zdalne_hosty_liczba"] == 0:
-            self.lbl_stat_vram_zdalnie.setText("brak hostów")
-        elif stan["zdalne_hosty_nieosiagalne"] == stan["zdalne_hosty_liczba"]:
-            self.lbl_stat_vram_zdalnie.setText("niedostępne")
-        else:
-            vram_zdalnie_gb = stan["vram_zdalnie_bajty"] / (1024 ** 3)
-            self.lbl_stat_vram_zdalnie.setText(
-                f"{vram_zdalnie_gb:.1f} GB ({stan['zaladowane_zdalnie_liczba']})"
-            )
 
         self.lbl_stat_modele.setText(str(len(stan["models"])))
 
@@ -1101,9 +1037,16 @@ class MainWindow(QMainWindow):
             self._webui_worker = self._uruchom_akcje(webui_zainstaluj, "Instalacja Open WebUI")
             return
 
-        # WHY: druga funkcja przycisku - uruchom serwer (jeśli jeszcze nie działa)
-        #      i otwórz go w przeglądarce. Nie idzie przez _uruchom_akcje, bo
-        #      potrzebujemy dodatkowego kroku (otwarcie przeglądarki) po sukcesie.
+        if self._webui_dziala:
+            # WHY: trzecia funkcja przycisku - WebUI już działa, więc w tym
+            #      miejscu tylko otwiera przeglądarkę, nic nie uruchamiamy.
+            QDesktopServices.openUrl(QUrl(WEBUI_URL))
+            return
+
+        # WHY: druga funkcja przycisku - uruchom serwer w tle. NIE otwieramy
+        #      już automatycznie przeglądarki po starcie - użytkownik czasem
+        #      chce tylko odpalić WebUI w tle, bez nowej karty w przeglądarce
+        #      za każdym razem; otwiera ją sam przyciskiem "Otwórz WebUI".
         self.wpis_log("Uruchamiam Open WebUI...")
         self.btn_webui.setEnabled(False)
         worker = ActionWorker(webui_uruchom, "Uruchomienie Open WebUI")
@@ -1114,8 +1057,6 @@ class MainWindow(QMainWindow):
             self.wpis_log(komunikat)
             if w in self._workers:
                 self._workers.remove(w)
-            if sukces:
-                QDesktopServices.openUrl(QUrl(WEBUI_URL))
             QTimer.singleShot(1200, self.odswiez)
 
         worker.zakonczono.connect(_po_uruchomieniu)
@@ -1194,41 +1135,6 @@ class MainWindow(QMainWindow):
         self.pull_worker.postep.connect(self._postep_pull)
         self.pull_worker.zakonczono.connect(self._koniec_pull)
         self.pull_worker.start()
-
-    def dodaj_model_zdalny_dialog(self):
-        # WHAT: kreator RemoteHost/RemoteModel - patrz sekcja "Modele zdalne" w CLAUDE.md.
-        dialog = DialogModelZdalny(self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        adres, model_zdalny, nazwa_lokalna = dialog.dane()
-        if not (adres and model_zdalny and nazwa_lokalna):
-            QMessageBox.warning(self, "Brak danych", "Wypełnij wszystkie pola.")
-            return
-        try:
-            host = _wyciagnij_host(adres)
-        except ValueError as e:
-            QMessageBox.warning(self, "Błędny adres", str(e))
-            return
-
-        # WHY: to może zrestartować lokalną usługę Ollama (jeśli host jest
-        #      nowy na białej liście) - wymagamy świadomej zgody.
-        odp = QMessageBox.question(
-            self, "Dodaj model zdalny",
-            f"Dodać model zdalny?\n\n"
-            f"  Zdalny host:   {adres}\n"
-            f"  Model zdalny:  {model_zdalny}\n"
-            f"  Nazwa lokalna: {nazwa_lokalna}\n\n"
-            "Jeśli ten host nie jest jeszcze na białej liście OLLAMA_REMOTES,\n"
-            "lokalna usługa Ollama zostanie zrestartowana.",
-        )
-        if odp != QMessageBox.StandardButton.Yes:
-            return
-
-        self.wpis_log(f"Dodaję model zdalny: {nazwa_lokalna} -> {model_zdalny}@{host}")
-        self._uruchom_akcje(
-            lambda: dodaj_model_zdalny(host, adres, model_zdalny, nazwa_lokalna),
-            f"Dodanie modelu zdalnego {nazwa_lokalna}",
-        )
 
     def _postep_pull(self, procent, status):
         # WHAT: aktualizuj pasek; do logu pisz tylko przy ZMIANIE statusu.
