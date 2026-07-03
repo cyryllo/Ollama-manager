@@ -15,3 +15,6 @@ env/
 
 # Kontekst dla asystentów AI - tylko lokalnie, nie trafia do repo
 CLAUDE.md
+
+# Sekret sesyjny generowany przez Open WebUI przy pierwszym uruchomieniu
+.webui_secret_key
