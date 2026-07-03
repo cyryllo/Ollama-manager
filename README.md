@@ -34,7 +34,7 @@ python3 ollama_manager.py
 - Autostart przy starcie systemu
 - Wykrywanie braku instalacji + przycisk instalującej ją jednym kliknięciem
 
-**Modele lokalne**
+**Modele**
 - Lista zainstalowanych modeli + usuwanie
 - Pobieranie nowych modeli z podpowiedziami popularnych (Llama, Gemma, Mistral, Phi, DeepSeek, Qwen) i paskiem postępu
 - Podgląd modeli aktualnie załadowanych do pamięci (VRAM)

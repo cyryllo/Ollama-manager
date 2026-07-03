@@ -619,7 +619,7 @@ class MainWindow(QMainWindow):
     # --- Budowa interfejsu ---
     def _buduj_ui(self):
         # WHAT: pasek serwera + pasek statystyk na górze, pod nim 2 zakładki
-        #       (Usługi / Modele lokalne), dziennik na dole na całą szerokość.
+        #       (Usługi / Modele), dziennik na dole na całą szerokość.
         # WHY:  finalny układ po trzech podejściach w Claude Design - zakładki
         #       trzymają wysokość okna w ryzach (jedna zakładka = jeden ekran),
         #       a pasek statystyk daje podgląd stanu bez klikania w ogóle.
@@ -659,7 +659,7 @@ class MainWindow(QMainWindow):
         # === Zakładki ====================================================
         zakladki = QTabWidget()
         zakladki.addTab(self._zakladka_uslugi(), "Usługi")
-        zakladki.addTab(self._zakladka_modele_lokalne(), "Modele lokalne")
+        zakladki.addTab(self._zakladka_modele_lokalne(), "Modele")
         layout.addWidget(zakladki, 1)
 
         # === Dziennik - na dole, pod zakładkami =========================
