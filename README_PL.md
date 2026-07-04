@@ -13,11 +13,18 @@ pod KDE — bez terminala, bez Dockera. Wszystko działa lokalnie, w Twoim LAN.
 
 ## Instalacja i uruchomienie
 
-**Jako aplikacja z menu (zalecane)** — instaluje zależności, kopiuje apkę do
-`~/.local/share/ollama-manager` i dodaje wpis w menu (sekcja Narzędzia), bez roota:
+**Jako aplikacja z menu, bez roota (zalecane)** — instaluje zależności przez pip,
+kopiuje apkę do `~/.local/share/ollama-manager` i dodaje wpis w menu (sekcja Narzędzia):
 
 ```
 ./install.sh
+```
+
+**Jako pakiet `.deb` (Debian/Ubuntu)** — zależności z `apt`, łatwe odinstalowanie:
+
+```
+./build-deb.sh
+sudo apt install ./ollama-manager_*_all.deb
 ```
 
 **Ręcznie, do dewelopowania** — bez kopiowania i wpisu w menu:

@@ -18,3 +18,6 @@ CLAUDE.md
 
 # Sekret sesyjny generowany przez Open WebUI przy pierwszym uruchomieniu
 .webui_secret_key
+
+# Wynik build-deb.sh - build artefakt, nie kod źródłowy
+*.deb

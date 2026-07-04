@@ -15,11 +15,18 @@ on KDE — no terminal, no Docker. Everything runs locally, on your LAN.
 
 ## Installation and running
 
-**As a menu app (recommended)** — installs dependencies, copies the app to
-`~/.local/share/ollama-manager` and adds a menu entry (Utilities section), no root needed:
+**As a menu app, no root (recommended)** — installs dependencies via pip, copies the app to
+`~/.local/share/ollama-manager` and adds a menu entry (Utilities section):
 
 ```
 ./install.sh
+```
+
+**As a `.deb` package (Debian/Ubuntu)** — dependencies come from `apt`, easy to uninstall:
+
+```
+./build-deb.sh
+sudo apt install ./ollama-manager_*_all.deb
 ```
 
 **Manually, for development** — no copying, no menu entry:
