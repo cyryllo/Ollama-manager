@@ -40,7 +40,7 @@ from PyQt6.QtWidgets import (
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.3.8"
+WERSJA = "0.3.11"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -78,6 +78,50 @@ POLECANE_MODELE = [
     "qwen2.5-coder:1.5b",
     "nomic-embed-text",  # embeddingi (RAG, wyszukiwanie semantyczne)
 ]
+
+
+# =============================================================================
+#  Tłumaczenia interfejsu (i18n)
+# =============================================================================
+# WHAT: prosty słownik klucz -> tłumaczenie, jeden plik JSON na język w lang/.
+# WHY:  polski tekst w kodzie jest jednocześnie kluczem słownika - brak wpisu
+#       w wybranym języku po prostu pokazuje polski oryginał (nigdy pusto/crash).
+#       Bez zależności od pyyaml/Qt Linguist (pylupdate6/lrelease) - dodanie
+#       kolejnego języka to nowy plik lang/<kod>.json, bez dotykania kodu.
+JEZYKI = {
+    "pl": "polski", "en": "English", "de": "Deutsch", "es": "español",
+    "fr": "français", "pt": "português", "it": "italiano",
+}
+JEZYK_DOMYSLNY = "pl"
+_KATALOG_LANG = Path(__file__).resolve().parent / "lang"
+_tlumaczenia = {}
+
+
+def _wczytaj_jezyk(kod):
+    # WHAT: ładuje słownik tłumaczeń danego języka do pamięci (moduł _()).
+    global _tlumaczenia
+    if kod == JEZYK_DOMYSLNY:
+        _tlumaczenia = {}  # WHY: polski to sam kod źródłowy - nie potrzeba pliku
+        return
+    try:
+        _tlumaczenia = json.loads((_KATALOG_LANG / f"{kod}.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        _tlumaczenia = {}
+
+
+def _(tekst):
+    # WHAT: zwraca tłumaczenie danego (polskiego) tekstu w aktualnym języku.
+    # WHY:  brak wpisu w słowniku -> pokazujemy oryginał, więc niekompletne
+    #       tłumaczenie nigdy nie wywala okna ani nie pokazuje pustego pola.
+    return _tlumaczenia.get(tekst, tekst)
+
+
+def _wczytaj_jezyk_zapisany():
+    return _ustawienia().value("jezyk", JEZYK_DOMYSLNY)
+
+
+def _zapisz_jezyk(kod):
+    _ustawienia().setValue("jezyk", kod)
 
 
 # =============================================================================
@@ -153,7 +197,7 @@ def _pkexec(args, wejscie=None):
     r = subprocess.run(["pkexec"] + args, input=wejscie, capture_output=True, text=True)
     if r.returncode != 0:
         # WHY: kod 126 = użytkownik anulował/brak uprawnień, 127 = błąd autoryzacji.
-        raise RuntimeError(r.stderr.strip() or f"pkexec: kod wyjścia {r.returncode}")
+        raise RuntimeError(r.stderr.strip() or _("pkexec: kod wyjścia {kod}").format(kod=r.returncode))
 
 
 def usluga_start():
@@ -277,17 +321,17 @@ def webui_zainstaluj():
             capture_output=True, text=True, timeout=None,
         )
         if wynik.returncode != 0:
-            raise RuntimeError(wynik.stderr.strip() or "instalacja uv: nieznany błąd")
+            raise RuntimeError(wynik.stderr.strip() or _("instalacja uv: nieznany błąd"))
         uv = _uv_binarka()
         if not uv:
-            raise RuntimeError("Zainstalowano 'uv', ale nie widać go w ~/.local/bin.")
+            raise RuntimeError(_("Zainstalowano 'uv', ale nie widać go w ~/.local/bin."))
 
     wynik = subprocess.run(
         [uv, "tool", "install", "--python", "3.11", "open-webui"],
         capture_output=True, text=True, timeout=None,  # WHY: pobranie Pythona 3.11 + zależności - może to potrwać
     )
     if wynik.returncode != 0:
-        raise RuntimeError(wynik.stderr.strip() or "uv tool install: nieznany błąd")
+        raise RuntimeError(wynik.stderr.strip() or _("uv tool install: nieznany błąd"))
 
 
 def _webui_dziala():
@@ -318,8 +362,7 @@ def webui_uruchom():
         time.sleep(1)
 
     raise RuntimeError(
-        "WebUI nie odpowiedziało w ciągu 3 minut. Log usługi: "
-        "journalctl --user -u open-webui -e"
+        _("WebUI nie odpowiedziało w ciągu 3 minut. Log usługi: journalctl --user -u open-webui -e")
     )
 
 
@@ -340,7 +383,7 @@ def webui_zatrzymaj():
     wzorzec = f"{binarka} serve" if binarka else "open-webui serve"
     wynik = subprocess.run(["pkill", "-f", wzorzec], capture_output=True, text=True, timeout=5)
     if wynik.returncode not in (0, 1):  # WHY: 1 = pkill nie znalazł procesu - i tak już zatrzymane
-        raise RuntimeError(wynik.stderr.strip() or "pkill: nie udało się zatrzymać procesu WebUI")
+        raise RuntimeError(wynik.stderr.strip() or _("pkill: nie udało się zatrzymać procesu WebUI"))
 
 
 def _webui_service_sciezka():
@@ -356,7 +399,10 @@ def _systemctl_user(args):
         ["systemctl", "--user"] + args, capture_output=True, text=True, timeout=10,
     )
     if r.returncode != 0:
-        raise RuntimeError(r.stderr.strip() or f"systemctl --user {' '.join(args)}: kod wyjścia {r.returncode}")
+        raise RuntimeError(
+            r.stderr.strip()
+            or _("systemctl --user {polecenie}: kod wyjścia {kod}").format(polecenie=" ".join(args), kod=r.returncode)
+        )
 
 
 def webui_autostart_wlaczony():
@@ -376,7 +422,7 @@ def _zapisz_webui_unit():
     #       dwóch osobnych dróg startowania, które trzeba by osobno zatrzymywać.
     binarka = webui_binarka()
     if not binarka:
-        raise RuntimeError("Open WebUI nie jest zainstalowane.")
+        raise RuntimeError(_("Open WebUI nie jest zainstalowane."))
     tresc = (
         "[Unit]\n"
         "Description=Open WebUI\n"
@@ -438,17 +484,17 @@ def litellm_zainstaluj():
             capture_output=True, text=True, timeout=None,
         )
         if wynik.returncode != 0:
-            raise RuntimeError(wynik.stderr.strip() or "instalacja uv: nieznany błąd")
+            raise RuntimeError(wynik.stderr.strip() or _("instalacja uv: nieznany błąd"))
         uv = _uv_binarka()
         if not uv:
-            raise RuntimeError("Zainstalowano 'uv', ale nie widać go w ~/.local/bin.")
+            raise RuntimeError(_("Zainstalowano 'uv', ale nie widać go w ~/.local/bin."))
 
     wynik = subprocess.run(
         [uv, "tool", "install", "litellm[proxy]"],
         capture_output=True, text=True, timeout=None,
     )
     if wynik.returncode != 0:
-        raise RuntimeError(wynik.stderr.strip() or "uv tool install: nieznany błąd")
+        raise RuntimeError(wynik.stderr.strip() or _("uv tool install: nieznany błąd"))
 
 
 def _litellm_dziala():
@@ -521,7 +567,7 @@ def _zapisz_litellm_unit():
     #       "Zatrzymaj" działało niezależnie od tego, skąd LiteLLM wystartował.
     binarka = litellm_binarka()
     if not binarka:
-        raise RuntimeError("LiteLLM nie jest zainstalowane.")
+        raise RuntimeError(_("LiteLLM nie jest zainstalowane."))
     sciezka_config = _litellm_config_sciezka()
     tresc = (
         "[Unit]\n"
@@ -556,8 +602,7 @@ def litellm_uruchom(serwery):
         time.sleep(1)
 
     raise RuntimeError(
-        "LiteLLM nie odpowiedziało w ciągu 60 s. Log usługi: "
-        "journalctl --user -u litellm -e"
+        _("LiteLLM nie odpowiedziało w ciągu 60 s. Log usługi: journalctl --user -u litellm -e")
     )
 
 
@@ -725,9 +770,9 @@ class PullWorker(QThread):
                     self.postep.emit(int(completed / total * 100), status)
                 else:
                     self.postep.emit(-1, status)
-            self.zakonczono.emit(True, f"Pobrano model: {self.model}")
+            self.zakonczono.emit(True, _("Pobrano model: {model}").format(model=self.model))
         except Exception as e:
-            self.zakonczono.emit(False, f"Błąd pobierania: {e}")
+            self.zakonczono.emit(False, _("Błąd pobierania: {blad}").format(blad=e))
 
 
 class ActionWorker(QThread):
@@ -748,7 +793,7 @@ class ActionWorker(QThread):
             self.funkcja()
             self.zakonczono.emit(True, f"{self.opis}: OK")
         except Exception as e:
-            self.zakonczono.emit(False, f"{self.opis}: błąd - {e}")
+            self.zakonczono.emit(False, _("{opis}: błąd - {blad}").format(opis=self.opis, blad=e))
 
 
 class AgregatorWorker(QThread):
@@ -775,7 +820,7 @@ class DialogZarzadzajSerwerami(QDialog):
 
     def __init__(self, serwery, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Zarządzaj serwerami")
+        self.setWindowTitle(_("Zarządzaj serwerami"))
         self.setMinimumWidth(420)
         # WHY: kopia robocza - lista trafia do wywołującego dopiero po zamknięciu.
         self.serwery = [dict(s) for s in serwery]
@@ -787,24 +832,24 @@ class DialogZarzadzajSerwerami(QDialog):
 
         pasek_usun = QHBoxLayout()
         pasek_usun.addStretch(1)
-        btn_usun = QPushButton("Usuń zaznaczony")
+        btn_usun = QPushButton(_("Usuń zaznaczony"))
         btn_usun.clicked.connect(self._usun)
         pasek_usun.addWidget(btn_usun)
         layout.addLayout(pasek_usun)
 
         formularz = QHBoxLayout()
         self.pole_nazwa = QLineEdit()
-        self.pole_nazwa.setPlaceholderText("Nazwa (np. BC-250)")
+        self.pole_nazwa.setPlaceholderText(_("Nazwa (np. BC-250)"))
         self.pole_adres = QLineEdit()
-        self.pole_adres.setPlaceholderText("Adres (np. http://192.168.0.236:11434)")
-        btn_dodaj = QPushButton("Dodaj")
+        self.pole_adres.setPlaceholderText(_("Adres (np. http://192.168.0.236:11434)"))
+        btn_dodaj = QPushButton(_("Dodaj"))
         btn_dodaj.clicked.connect(self._dodaj)
         formularz.addWidget(self.pole_nazwa)
         formularz.addWidget(self.pole_adres, 1)
         formularz.addWidget(btn_dodaj)
         layout.addLayout(formularz)
 
-        btn_zamknij = QPushButton("Zamknij")
+        btn_zamknij = QPushButton(_("Zamknij"))
         btn_zamknij.clicked.connect(self.accept)
         layout.addWidget(btn_zamknij, alignment=Qt.AlignmentFlag.AlignRight)
 
@@ -819,7 +864,7 @@ class DialogZarzadzajSerwerami(QDialog):
         nazwa = self.pole_nazwa.text().strip()
         adres = self.pole_adres.text().strip().rstrip("/")
         if not nazwa or not adres:
-            QMessageBox.warning(self, "Brak danych", "Podaj nazwę i adres serwera.")
+            QMessageBox.warning(self, _("Brak danych"), _("Podaj nazwę i adres serwera."))
             return
         self.serwery.append({"nazwa": nazwa, "adres": adres})
         self.pole_nazwa.clear()
@@ -832,7 +877,7 @@ class DialogZarzadzajSerwerami(QDialog):
             return
         # WHY: przełącznik zawsze potrzebuje przynajmniej jednej pozycji do wyboru.
         if len(self.serwery) <= 1:
-            QMessageBox.warning(self, "Nie można usunąć", "Musi zostać co najmniej jeden serwer.")
+            QMessageBox.warning(self, _("Nie można usunąć"), _("Musi zostać co najmniej jeden serwer."))
             return
         del self.serwery[wiersz]
         self._odswiez_liste()
@@ -858,6 +903,11 @@ class MainWindow(QMainWindow):
         self._agregator_worker = None   # WHY: osobny wątek na podgląd modeli (zakładka "Agregator modeli")
         self._workers = []            # WHY: trzymamy referencje, by wątki nie zniknęły w trakcie
         self._ostatni_status = None   # WHY: żeby nie spamować logu tym samym statusem pull
+
+        # WHY: język wczytujemy PRZED _buduj_ui() - wszystkie widgety mają
+        #      dostać właściwe napisy od razu przy pierwszym budowaniu okna.
+        self._jezyk_aktywny = _wczytaj_jezyk_zapisany()
+        _wczytaj_jezyk(self._jezyk_aktywny)
 
         self.setWindowTitle(f"Ollama Manager {WERSJA}")
         # WHY: zakładka "Usługi" mieści sterowanie usługą + Open WebUI jedna pod
@@ -891,41 +941,48 @@ class MainWindow(QMainWindow):
         #      (lista/pobierz/usuń/VRAM) - bez edycji stałej OLLAMA_URL.
         #      Sterowanie USŁUGĄ (start/stop/autostart) zawsze zostaje lokalne.
         pasek_serwer = QHBoxLayout()
-        pasek_serwer.addWidget(QLabel("Serwer:"))
+        pasek_serwer.addWidget(QLabel(_("Serwer:")))
         self.combo_serwer = QComboBox()
         self.combo_serwer.currentIndexChanged.connect(self._zmien_serwer)
         pasek_serwer.addWidget(self.combo_serwer, 1)
-        btn_zarzadzaj_serwerami = QPushButton("Zarządzaj serwerami...")
+        btn_zarzadzaj_serwerami = QPushButton(_("Zarządzaj serwerami..."))
         btn_zarzadzaj_serwerami.clicked.connect(self._zarzadzaj_serwerami)
         pasek_serwer.addWidget(btn_zarzadzaj_serwerami)
+        # WHY: przełącznik języka obok serwerów - jedyne dwa "globalne" ustawienia
+        #      okna, więc żyją w tym samym górnym pasku zamiast osobnego wiersza.
+        pasek_serwer.addWidget(QLabel(_("Język:")))
+        self.combo_jezyk = QComboBox()
+        self.combo_jezyk.currentIndexChanged.connect(self._zmien_jezyk)
+        pasek_serwer.addWidget(self.combo_jezyk)
         layout.addLayout(pasek_serwer)
         self._wypelnij_combo_serwer()
+        self._wypelnij_combo_jezyk()
 
         # === Pasek statystyk ============================================
         pasek_staty = QHBoxLayout()
-        kafelek, self.lbl_stat_ollama = self._kafelek_stat("OLLAMA")
+        kafelek, self.lbl_stat_ollama = self._kafelek_stat(_("OLLAMA"))
         pasek_staty.addWidget(kafelek)
-        kafelek, self.lbl_stat_webui = self._kafelek_stat("WEBUI")
+        kafelek, self.lbl_stat_webui = self._kafelek_stat(_("WEBUI"))
         pasek_staty.addWidget(kafelek)
-        kafelek, self.lbl_stat_vram_lokalnie = self._kafelek_stat("VRAM")
+        kafelek, self.lbl_stat_vram_lokalnie = self._kafelek_stat(_("VRAM"))
         pasek_staty.addWidget(kafelek)
-        kafelek, self.lbl_stat_modele = self._kafelek_stat("MODELE")
+        kafelek, self.lbl_stat_modele = self._kafelek_stat(_("MODELE"))
         pasek_staty.addWidget(kafelek)
         pasek_staty.addStretch(1)
         layout.addLayout(pasek_staty)
 
         # === Zakładki ====================================================
         zakladki = QTabWidget()
-        zakladki.addTab(self._zakladka_uslugi(), "Usługi")
-        zakladki.addTab(self._zakladka_modele_lokalne(), "Modele")
-        zakladki.addTab(self._zakladka_agregator(), "Agregator modeli")
-        zakladki.addTab(self._zakladka_zaawansowane(), "Zaawansowane")
+        zakladki.addTab(self._zakladka_uslugi(), _("Usługi"))
+        zakladki.addTab(self._zakladka_modele_lokalne(), _("Modele"))
+        zakladki.addTab(self._zakladka_agregator(), _("Agregator modeli"))
+        zakladki.addTab(self._zakladka_zaawansowane(), _("Zaawansowane"))
         layout.addWidget(zakladki, 1)
 
         # === Dziennik - na dole, pod zakładkami =========================
         # WHY: log ma być widoczny bez względu na to, którą zakładkę oglądasz
         #      (np. postęp pobierania modelu widać, nawet patrząc na Usługi).
-        karta_log = QGroupBox("Dziennik")
+        karta_log = QGroupBox(_("Dziennik"))
         uk_log = QVBoxLayout(karta_log)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -985,13 +1042,13 @@ class MainWindow(QMainWindow):
         pole = QLineEdit()
         pole.setPlaceholderText(placeholder)
         pole.setMaximumWidth(120)
-        przycisk = QPushButton("Zastosuj")
+        przycisk = QPushButton(_("Zastosuj"))
         przycisk.clicked.connect(metoda_zastosuj)
         wiersz.addWidget(pole)
         wiersz.addWidget(przycisk)
         wiersz.addStretch(1)
         uklad.addLayout(wiersz)
-        lbl_aktualnie = QLabel("aktualnie: sprawdzam...")
+        lbl_aktualnie = QLabel(_("aktualnie: sprawdzam..."))
         uklad.addWidget(lbl_aktualnie)
         return uklad, pole, przycisk, lbl_aktualnie
 
@@ -1011,13 +1068,13 @@ class MainWindow(QMainWindow):
         combo = QComboBox()
         for etykieta, wartosc in opcje:
             combo.addItem(etykieta, wartosc)
-        przycisk = QPushButton("Zastosuj")
+        przycisk = QPushButton(_("Zastosuj"))
         przycisk.clicked.connect(metoda_zastosuj)
         wiersz.addWidget(combo)
         wiersz.addWidget(przycisk)
         wiersz.addStretch(1)
         uklad.addLayout(wiersz)
-        lbl_aktualnie = QLabel("aktualnie: sprawdzam...")
+        lbl_aktualnie = QLabel(_("aktualnie: sprawdzam..."))
         uklad.addWidget(lbl_aktualnie)
         return uklad, combo, przycisk, lbl_aktualnie
 
@@ -1035,13 +1092,13 @@ class MainWindow(QMainWindow):
         uklad.addWidget(lbl_opis)
         wiersz = QHBoxLayout()
         checkbox = QCheckBox(etykieta_checkbox)
-        przycisk = QPushButton("Zastosuj")
+        przycisk = QPushButton(_("Zastosuj"))
         przycisk.clicked.connect(metoda_zastosuj)
         wiersz.addWidget(checkbox)
         wiersz.addWidget(przycisk)
         wiersz.addStretch(1)
         uklad.addLayout(wiersz)
-        lbl_aktualnie = QLabel("aktualnie: sprawdzam...")
+        lbl_aktualnie = QLabel(_("aktualnie: sprawdzam..."))
         uklad.addWidget(lbl_aktualnie)
         return uklad, checkbox, przycisk, lbl_aktualnie
 
@@ -1059,23 +1116,23 @@ class MainWindow(QMainWindow):
         lewa_kolumna = QVBoxLayout()
         kolumny.addLayout(lewa_kolumna, 1)
 
-        karta_ollama = QGroupBox("Ollama")
+        karta_ollama = QGroupBox(_("Ollama"))
         uk_ollama = QVBoxLayout(karta_ollama)
-        self.lbl_ollama_status = QLabel("sprawdzam...")
-        uk_ollama.addLayout(self._naglowek_sekcji("Usługa systemd", self.lbl_ollama_status))
+        self.lbl_ollama_status = QLabel(_("sprawdzam..."))
+        uk_ollama.addLayout(self._naglowek_sekcji(_("Usługa systemd"), self.lbl_ollama_status))
         pasek_przyciskow = QHBoxLayout()
-        self.btn_start = QPushButton("Uruchom")
+        self.btn_start = QPushButton(_("Uruchom"))
         self.btn_start.clicked.connect(self.start_uslugi)
-        self.btn_stop = QPushButton("Zatrzymaj")
+        self.btn_stop = QPushButton(_("Zatrzymaj"))
         self.btn_stop.clicked.connect(self.stop_uslugi)
-        self.btn_instaluj = QPushButton("Zainstaluj Ollama")
+        self.btn_instaluj = QPushButton(_("Zainstaluj Ollama"))
         self.btn_instaluj.setVisible(False)  # WHY: widoczny tylko gdy wykryjemy brak instalacji
         self.btn_instaluj.clicked.connect(self.zainstaluj_ollame)
         pasek_przyciskow.addWidget(self.btn_start)
         pasek_przyciskow.addWidget(self.btn_stop)
         pasek_przyciskow.addWidget(self.btn_instaluj)
         uk_ollama.addLayout(pasek_przyciskow)
-        self.chk_autostart = QCheckBox("Uruchamiaj automatycznie przy starcie systemu")
+        self.chk_autostart = QCheckBox(_("Uruchamiaj automatycznie przy starcie systemu"))
         self.chk_autostart.toggled.connect(self.przelacz_autostart)
         uk_ollama.addWidget(self.chk_autostart)
 
@@ -1084,19 +1141,19 @@ class MainWindow(QMainWindow):
         # --- Open WebUI, w takiej samej ramce (QGroupBox) jak Sterowanie ---
         karta_webui = QGroupBox("Open WebUI")
         uk_webui = QVBoxLayout(karta_webui)
-        self.lbl_webui_status = QLabel("sprawdzam...")
-        uk_webui.addLayout(self._naglowek_sekcji("Panel czatu w przeglądarce", self.lbl_webui_status))
+        self.lbl_webui_status = QLabel(_("sprawdzam..."))
+        uk_webui.addLayout(self._naglowek_sekcji(_("Panel czatu w przeglądarce"), self.lbl_webui_status))
         pasek_webui = QHBoxLayout()
-        self.btn_webui = QPushButton("sprawdzam...")
+        self.btn_webui = QPushButton(_("sprawdzam..."))
         self.btn_webui.clicked.connect(self.klik_webui)
-        self.btn_webui_stop = QPushButton("Zatrzymaj")
+        self.btn_webui_stop = QPushButton(_("Zatrzymaj"))
         self.btn_webui_stop.setEnabled(False)  # WHY: aktywny dopiero gdy WebUI faktycznie działa
         self.btn_webui_stop.clicked.connect(self.zatrzymaj_webui)
         pasek_webui.addWidget(self.btn_webui)
         pasek_webui.addWidget(self.btn_webui_stop)
         uk_webui.addLayout(pasek_webui)
         # WHY: usługa --user, więc to osobny checkbox od autostartu Ollamy (systemowego)
-        self.chk_webui_autostart = QCheckBox("Uruchamiaj automatycznie po zalogowaniu")
+        self.chk_webui_autostart = QCheckBox(_("Uruchamiaj automatycznie po zalogowaniu"))
         self.chk_webui_autostart.setEnabled(False)  # WHY: bez sensu, dopóki WebUI nie jest zainstalowane
         self.chk_webui_autostart.toggled.connect(self.przelacz_webui_autostart)
         uk_webui.addWidget(self.chk_webui_autostart)
@@ -1105,7 +1162,7 @@ class MainWindow(QMainWindow):
         lewa_kolumna.addStretch(1)  # WHY: karty trzymają się góry lewej kolumny
 
         # --- Prawa kolumna: Załadowane do pamięci (VRAM) ---
-        karta_vram = QGroupBox("Załadowane do pamięci (VRAM)")
+        karta_vram = QGroupBox(_("Załadowane do pamięci (VRAM)"))
         uk_vram = QVBoxLayout(karta_vram)
         self.lista_zaladowane = QListWidget()  # WHY: cała kolumna - niech się rozciąga, bez limitu wysokości
         uk_vram.addWidget(self.lista_zaladowane)
@@ -1123,7 +1180,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(kolumny, 1)
 
         # --- Lewa kolumna: Pobierz nowy model ---
-        karta_pobierz = QGroupBox("Pobierz nowy model")
+        karta_pobierz = QGroupBox(_("Pobierz nowy model"))
         uk_pobierz = QVBoxLayout(karta_pobierz)
         pasek_pull = QHBoxLayout()
         self.combo_modele = QComboBox()
@@ -1132,9 +1189,9 @@ class MainWindow(QMainWindow):
         # WHY: podpowiedzi na liście to tylko wybór - pełna baza jest na ollama.com,
         #      placeholder przypomina o tym, gdy pole jest puste.
         self.combo_modele.lineEdit().setPlaceholderText(
-            "wpisz nazwę modelu lub wybierz z listy"
+            _("wpisz nazwę modelu lub wybierz z listy")
         )
-        self.btn_pull = QPushButton("Pobierz")
+        self.btn_pull = QPushButton(_("Pobierz"))
         self.btn_pull.clicked.connect(self.pobierz_model)
         pasek_pull.addWidget(self.combo_modele, 1)
         pasek_pull.addWidget(self.btn_pull)
@@ -1144,8 +1201,8 @@ class MainWindow(QMainWindow):
         # WHY:  powyższa lista to tylko garść popularnych modeli - reszta jest
         #       na ollama.com/library, skąd można skopiować dowolną nazwę.
         lbl_link = QLabel(
-            'Sprawdź dostępne modele na <a href="https://ollama.com/library">'
-            "ollama.com/library</a>, wpisz nazwę w polu powyżej i kliknij Pobierz."
+            _('Sprawdź dostępne modele na <a href="https://ollama.com/library">'
+              "ollama.com/library</a>, wpisz nazwę w polu powyżej i kliknij Pobierz.")
         )
         lbl_link.setWordWrap(True)
         lbl_link.setOpenExternalLinks(True)
@@ -1158,9 +1215,9 @@ class MainWindow(QMainWindow):
         kolumny.addWidget(karta_pobierz, 1)
 
         # --- Prawa kolumna: Zainstalowane modele ---
-        karta_zainstalowane = QGroupBox("Zainstalowane modele")
+        karta_zainstalowane = QGroupBox(_("Zainstalowane modele"))
         uk_zainstalowane = QVBoxLayout(karta_zainstalowane)
-        self.btn_usun = QPushButton("Usuń zaznaczony")
+        self.btn_usun = QPushButton(_("Usuń zaznaczony"))
         self.btn_usun.setEnabled(False)  # WHY: aktywny dopiero po zaznaczeniu modelu
         self.btn_usun.clicked.connect(self.usun_model)
         pasek_usun = QHBoxLayout()
@@ -1185,15 +1242,15 @@ class MainWindow(QMainWindow):
 
         karta_litellm = QGroupBox("LiteLLM")
         uk_litellm = QVBoxLayout(karta_litellm)
-        self.lbl_litellm_status = QLabel("sprawdzam...")
+        self.lbl_litellm_status = QLabel(_("sprawdzam..."))
         uk_litellm.addLayout(
-            self._naglowek_sekcji("Jeden adres dla modeli z wielu serwerów Ollamy", self.lbl_litellm_status)
+            self._naglowek_sekcji(_("Jeden adres dla modeli z wielu serwerów Ollamy"), self.lbl_litellm_status)
         )
         opis_litellm = QLabel(
-            "Wystawia jeden endpoint (zgodny z API OpenAI), za którym LiteLLM "
-            "kieruje zapytania do modeli na hostach z listy serwerów (pasek u "
-            "góry okna). Dzięki temu np. VS Code/Continue może korzystać z "
-            "modeli na kilku komputerach naraz, wskazując tylko na ten jeden adres."
+            _("Wystawia jeden endpoint (zgodny z API OpenAI), za którym LiteLLM "
+              "kieruje zapytania do modeli na hostach z listy serwerów (pasek u "
+              "góry okna). Dzięki temu np. VS Code/Continue może korzystać z "
+              "modeli na kilku komputerach naraz, wskazując tylko na ten jeden adres.")
         )
         opis_litellm.setWordWrap(True)
         uk_litellm.addWidget(opis_litellm)
@@ -1201,35 +1258,37 @@ class MainWindow(QMainWindow):
         #       zaznaczalny myszką do skopiowania - bez grzebania w kodzie po LITELLM_URL.
         # WHY:  to jedyne miejsce w oknie, gdzie ten adres jest w ogóle pokazany -
         #       bez niego użytkownik nie wie, gdzie właściwie podłączyć klienta.
-        lbl_litellm_adres = QLabel(f"Adres dla klientów (np. Continue): <b>{LITELLM_URL}/v1</b>")
+        lbl_litellm_adres = QLabel(
+            _("Adres dla klientów (np. Continue): <b>{adres}</b>").format(adres=f"{LITELLM_URL}/v1")
+        )
         lbl_litellm_adres.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         uk_litellm.addWidget(lbl_litellm_adres)
         pasek_litellm = QHBoxLayout()
-        self.btn_litellm = QPushButton("sprawdzam...")
+        self.btn_litellm = QPushButton(_("sprawdzam..."))
         self.btn_litellm.clicked.connect(self.klik_litellm)
-        self.btn_litellm_stop = QPushButton("Zatrzymaj")
+        self.btn_litellm_stop = QPushButton(_("Zatrzymaj"))
         self.btn_litellm_stop.setEnabled(False)  # WHY: aktywny dopiero gdy LiteLLM faktycznie działa
         self.btn_litellm_stop.clicked.connect(self.zatrzymaj_litellm)
         pasek_litellm.addWidget(self.btn_litellm)
         pasek_litellm.addWidget(self.btn_litellm_stop)
         uk_litellm.addLayout(pasek_litellm)
         # WHY: usługa --user, więc osobny checkbox od autostartu Ollamy (systemowego)
-        self.chk_litellm_autostart = QCheckBox("Uruchamiaj automatycznie po zalogowaniu")
+        self.chk_litellm_autostart = QCheckBox(_("Uruchamiaj automatycznie po zalogowaniu"))
         self.chk_litellm_autostart.setEnabled(False)  # WHY: bez sensu, dopóki LiteLLM nie jest zainstalowane
         self.chk_litellm_autostart.toggled.connect(self.przelacz_litellm_autostart)
         uk_litellm.addWidget(self.chk_litellm_autostart)
         layout.addWidget(karta_litellm)
 
-        karta_agregator = QGroupBox("Modele w agregatorze")
+        karta_agregator = QGroupBox(_("Modele w agregatorze"))
         uk_agregator = QVBoxLayout(karta_agregator)
         pasek_agregator = QHBoxLayout()
         lbl_agregator = QLabel(
-            "Podgląd modeli i hostów, które trafią do configu LiteLLM - na "
-            "podstawie listy serwerów u góry okna."
+            _("Podgląd modeli i hostów, które trafią do configu LiteLLM - na "
+              "podstawie listy serwerów u góry okna.")
         )
         lbl_agregator.setWordWrap(True)
         pasek_agregator.addWidget(lbl_agregator, 1)
-        self.btn_odswiez_agregator = QPushButton("Odśwież listę")
+        self.btn_odswiez_agregator = QPushButton(_("Odśwież listę"))
         self.btn_odswiez_agregator.clicked.connect(self.odswiez_liste_agregatora)
         pasek_agregator.addWidget(self.btn_odswiez_agregator)
         uk_agregator.addLayout(pasek_agregator)
@@ -1251,20 +1310,20 @@ class MainWindow(QMainWindow):
         strona = QWidget()
         layout = QVBoxLayout(strona)
 
-        karta = QGroupBox("Ollama - zmienne środowiskowe usługi")
+        karta = QGroupBox(_("Ollama - zmienne środowiskowe usługi"))
         uk = QVBoxLayout(karta)
         lbl_wstep = QLabel(
-            "Każda zmiana zapisuje override systemd i restartuje usługę Ollama "
-            "(wymaga uprawnień administratora - załadowane modele na chwilę znikną "
-            "z pamięci). Puste pole + Zastosuj = powrót do domyślnego zachowania Ollamy."
+            _("Każda zmiana zapisuje override systemd i restartuje usługę Ollama "
+              "(wymaga uprawnień administratora - załadowane modele na chwilę znikną "
+              "z pamięci). Puste pole + Zastosuj = powrót do domyślnego zachowania Ollamy.")
         )
         lbl_wstep.setWordWrap(True)
         uk.addWidget(lbl_wstep)
 
         uklad, self.pole_keep_alive, self.btn_keep_alive, self.lbl_keep_alive_aktualny = self._wiersz_ollama_env(
             "OLLAMA_KEEP_ALIVE",
-            "Jak długo model zostaje w pamięci po ostatnim zapytaniu, zanim zostanie "
-            "wyładowany (domyślnie kilka minut). np. 30m, 1h, -1 (zawsze), 0 (od razu).",
+            _("Jak długo model zostaje w pamięci po ostatnim zapytaniu, zanim zostanie "
+              "wyładowany (domyślnie kilka minut). np. 30m, 1h, -1 (zawsze), 0 (od razu)."),
             "np. 30m",
             self.ustaw_keep_alive,
         )
@@ -1272,8 +1331,8 @@ class MainWindow(QMainWindow):
 
         uklad, self.pole_context_length, self.btn_context_length, self.lbl_context_length_aktualny = self._wiersz_ollama_env(
             "OLLAMA_CONTEXT_LENGTH",
-            "Rozmiar okna kontekstu w tokenach (domyślnie 4096 - za mało do pracy "
-            "agentowej w Continue/OpenCode).",
+            _("Rozmiar okna kontekstu w tokenach (domyślnie 4096 - za mało do pracy "
+              "agentowej w Continue/OpenCode)."),
             "np. 32768",
             self.ustaw_context_length,
         )
@@ -1281,8 +1340,8 @@ class MainWindow(QMainWindow):
 
         uklad, self.pole_max_loaded, self.btn_max_loaded, self.lbl_max_loaded_aktualny = self._wiersz_ollama_env(
             "OLLAMA_MAX_LOADED_MODELS",
-            "Ile modeli może być jednocześnie załadowanych do pamięci (domyślnie "
-            "3x liczba GPU).",
+            _("Ile modeli może być jednocześnie załadowanych do pamięci (domyślnie "
+              "3x liczba GPU)."),
             "np. 1",
             self.ustaw_max_loaded_models,
         )
@@ -1290,7 +1349,7 @@ class MainWindow(QMainWindow):
 
         uklad, self.pole_num_parallel, self.btn_num_parallel, self.lbl_num_parallel_aktualny = self._wiersz_ollama_env(
             "OLLAMA_NUM_PARALLEL",
-            "Ile równoległych zapytań obsłuży jeden załadowany model naraz.",
+            _("Ile równoległych zapytań obsłuży jeden załadowany model naraz."),
             "np. 1",
             self.ustaw_num_parallel,
         )
@@ -1299,9 +1358,9 @@ class MainWindow(QMainWindow):
         uklad, self.combo_flash_attention, self.btn_flash_attention, self.lbl_flash_attention_aktualny = (
             self._wiersz_ollama_env_combo(
                 "OLLAMA_FLASH_ATTENTION",
-                "Zmniejsza zużycie pamięci przy dłuższym kontekście, jeśli model i "
-                "sprzęt to wspierają.",
-                [("domyślne (auto)", ""), ("włączone", "1"), ("wyłączone", "0")],
+                _("Zmniejsza zużycie pamięci przy dłuższym kontekście, jeśli model i "
+                  "sprzęt to wspierają."),
+                [(_("domyślne (auto)"), ""), (_("włączone"), "1"), (_("wyłączone"), "0")],
                 self.ustaw_flash_attention,
             )
         )
@@ -1309,28 +1368,28 @@ class MainWindow(QMainWindow):
 
         uklad, self.combo_kv_cache, self.btn_kv_cache, self.lbl_kv_cache_aktualny = self._wiersz_ollama_env_combo(
             "OLLAMA_KV_CACHE_TYPE",
-            "Kwantyzacja pamięci podręcznej kontekstu - q8_0 to ok. -50% zużycia "
-            "VRAM przy pomijalnej stracie jakości.",
-            [("domyślne (f16)", ""), ("q8_0", "q8_0"), ("q4_0", "q4_0")],
+            _("Kwantyzacja pamięci podręcznej kontekstu - q8_0 to ok. -50% zużycia "
+              "VRAM przy pomijalnej stracie jakości."),
+            [(_("domyślne (f16)"), ""), ("q8_0", "q8_0"), ("q4_0", "q4_0")],
             self.ustaw_kv_cache_type,
         )
         uk.addLayout(uklad)
 
         uklad, self.chk_vulkan, self.btn_vulkan, self.lbl_vulkan_aktualny = self._wiersz_ollama_env_checkbox(
             "OLLAMA_VULKAN",
-            "Backend Vulkan zamiast ROCm - szersza kompatybilność z kartami AMD "
-            "bez pełnego wsparcia ROCm (np. BC-250).",
-            "Włącz Vulkan",
+            _("Backend Vulkan zamiast ROCm - szersza kompatybilność z kartami AMD "
+              "bez pełnego wsparcia ROCm (np. BC-250)."),
+            _("Włącz Vulkan"),
             self.ustaw_vulkan,
         )
         uk.addLayout(uklad)
 
         uklad, self.chk_igpu, self.btn_igpu, self.lbl_igpu_aktualny = self._wiersz_ollama_env_checkbox(
             "OLLAMA_IGPU_ENABLE",
-            "Czy Ollama może korzystać ze zintegrowanego GPU (iGPU) - domyślnie "
-            "włączone. Odznacz, żeby wymusić pominięcie iGPU (np. przy problemach "
-            "na jednolitej architekturze CPU+GPU jak BC-250).",
-            "Włącz iGPU (domyślnie włączone)",
+            _("Czy Ollama może korzystać ze zintegrowanego GPU (iGPU) - domyślnie "
+              "włączone. Odznacz, żeby wymusić pominięcie iGPU (np. przy problemach "
+              "na jednolitej architekturze CPU+GPU jak BC-250)."),
+            _("Włącz iGPU (domyślnie włączone)"),
             self.ustaw_igpu,
         )
         uk.addLayout(uklad)
@@ -1367,7 +1426,7 @@ class MainWindow(QMainWindow):
         self.client.base_url = adres
         self._serwer_aktywny_adres = adres
         _zapisz_serwer_aktywny(adres)
-        self.wpis_log(f"Przełączono na serwer: {self.combo_serwer.itemText(index)}")
+        self.wpis_log(_("Przełączono na serwer: {serwer}").format(serwer=self.combo_serwer.itemText(index)))
         self.odswiez()
 
     def _zarzadzaj_serwerami(self):
@@ -1381,6 +1440,30 @@ class MainWindow(QMainWindow):
             self.client.base_url = self._serwer_aktywny_adres
             _zapisz_serwer_aktywny(self._serwer_aktywny_adres)
         self._wypelnij_combo_serwer()
+        self.odswiez()
+
+    # --- Przełącznik języka ---
+    def _wypelnij_combo_jezyk(self):
+        self.combo_jezyk.blockSignals(True)
+        self.combo_jezyk.clear()
+        for i, (kod, nazwa) in enumerate(JEZYKI.items()):
+            self.combo_jezyk.addItem(nazwa, kod)
+            if kod == self._jezyk_aktywny:
+                self.combo_jezyk.setCurrentIndex(i)
+        self.combo_jezyk.blockSignals(False)
+
+    def _zmien_jezyk(self, index):
+        # WHY: przebudowujemy CAŁE okno tą samą funkcją co przy starcie
+        #      (_buduj_ui) - żywa zmiana języka bez restartu aplikacji, bo
+        #      widgety i tak zawsze budujemy od zera z aktualnych danych
+        #      (self.serwery, self._serwer_aktywny_adres, ...).
+        kod = self.combo_jezyk.itemData(index)
+        if not kod or kod == self._jezyk_aktywny:
+            return
+        self._jezyk_aktywny = kod
+        _wczytaj_jezyk(kod)
+        _zapisz_jezyk(kod)
+        self._buduj_ui()
         self.odswiez()
 
     # --- Pomocnicze ---
@@ -1428,32 +1511,43 @@ class MainWindow(QMainWindow):
         ):
             widget.setEnabled(stan["zainstalowana"])
 
-        self.lbl_keep_alive_aktualny.setText(f"aktualnie: {env.get('OLLAMA_KEEP_ALIVE') or 'domyślne'}")
+        _AKTUALNIE = _("aktualnie: {wartosc}")
+        self.lbl_keep_alive_aktualny.setText(
+            _AKTUALNIE.format(wartosc=env.get("OLLAMA_KEEP_ALIVE") or _("domyślne"))
+        )
         self.lbl_context_length_aktualny.setText(
-            f"aktualnie: {env.get('OLLAMA_CONTEXT_LENGTH') or 'domyślne (4096)'}"
+            _AKTUALNIE.format(wartosc=env.get("OLLAMA_CONTEXT_LENGTH") or _("domyślne (4096)"))
         )
-        self.lbl_max_loaded_aktualny.setText(f"aktualnie: {env.get('OLLAMA_MAX_LOADED_MODELS') or 'domyślne'}")
-        self.lbl_num_parallel_aktualny.setText(f"aktualnie: {env.get('OLLAMA_NUM_PARALLEL') or 'domyślne'}")
+        self.lbl_max_loaded_aktualny.setText(
+            _AKTUALNIE.format(wartosc=env.get("OLLAMA_MAX_LOADED_MODELS") or _("domyślne"))
+        )
+        self.lbl_num_parallel_aktualny.setText(
+            _AKTUALNIE.format(wartosc=env.get("OLLAMA_NUM_PARALLEL") or _("domyślne"))
+        )
         self.lbl_flash_attention_aktualny.setText(
-            f"aktualnie: {env.get('OLLAMA_FLASH_ATTENTION') or 'domyślne (auto)'}"
+            _AKTUALNIE.format(wartosc=env.get("OLLAMA_FLASH_ATTENTION") or _("domyślne (auto)"))
         )
-        self.lbl_kv_cache_aktualny.setText(f"aktualnie: {env.get('OLLAMA_KV_CACHE_TYPE') or 'domyślne (f16)'}")
+        self.lbl_kv_cache_aktualny.setText(
+            _AKTUALNIE.format(wartosc=env.get("OLLAMA_KV_CACHE_TYPE") or _("domyślne (f16)"))
+        )
         # WHY: checkbox nie ma osobnego sygnału do auto-zastosowania (jak
         #      chk_autostart) - synchronizacja stanu przy odświeżeniu nie
         #      wywoła żadnej akcji, więc nie trzeba blockSignals.
         self.chk_vulkan.setChecked(env.get("OLLAMA_VULKAN") == "1")
-        self.lbl_vulkan_aktualny.setText(f"aktualnie: {env.get('OLLAMA_VULKAN') or 'domyślne (0)'}")
+        self.lbl_vulkan_aktualny.setText(_AKTUALNIE.format(wartosc=env.get("OLLAMA_VULKAN") or _("domyślne (0)")))
         # WHY: OLLAMA_IGPU_ENABLE domyślnie WŁĄCZONE (w przeciwieństwie do Vulkana) -
         #      checkbox ma być zaznaczony, dopóki ktoś jawnie nie ustawi "false".
         self.chk_igpu.setChecked(env.get("OLLAMA_IGPU_ENABLE") != "false")
-        self.lbl_igpu_aktualny.setText(f"aktualnie: {env.get('OLLAMA_IGPU_ENABLE') or 'domyślne (włączone)'}")
+        self.lbl_igpu_aktualny.setText(
+            _AKTUALNIE.format(wartosc=env.get("OLLAMA_IGPU_ENABLE") or _("domyślne (włączone)"))
+        )
 
     def _po_odswiezeniu(self, stan):
         # WHAT: przełóż stan usługi/API na wygląd okna.
         # WHY: ten sam wzorzec statusu instalacji co przy karcie Open WebUI -
         #      spójny styl obu kart w zakładce "Usługi".
         self.lbl_ollama_status.setText(
-            "zainstalowana ✓" if stan["zainstalowana"] else "nie zainstalowana ✗"
+            _("zainstalowana ✓") if stan["zainstalowana"] else _("nie zainstalowana ✗")
         )
         if not stan["zainstalowana"]:
             # WHY: bez binarki 'ollama' sterowanie usługą nie ma sensu - chowamy
@@ -1502,18 +1596,18 @@ class MainWindow(QMainWindow):
         #       już odpowiada. Drugi przycisk ("Zatrzymaj") aktywny tylko gdy działa.
         self._webui_zainstalowane = stan["webui"]
         self._webui_dziala = stan["webui_dziala"]
-        self.lbl_webui_status.setText("zainstalowane ✓" if stan["webui"] else "nie zainstalowane ✗")
+        self.lbl_webui_status.setText(_("zainstalowane ✓") if stan["webui"] else _("nie zainstalowane ✗"))
         webui_w_toku = bool(self._webui_worker and self._webui_worker.isRunning())
         if webui_w_toku:
             self.btn_webui.setEnabled(False)
             self.btn_webui_stop.setEnabled(False)
         else:
             if not stan["webui"]:
-                self.btn_webui.setText("Zainstaluj WebUI")
+                self.btn_webui.setText(_("Zainstaluj WebUI"))
             elif stan["webui_dziala"]:
-                self.btn_webui.setText("Otwórz WebUI")
+                self.btn_webui.setText(_("Otwórz WebUI"))
             else:
-                self.btn_webui.setText("Uruchom WebUI")
+                self.btn_webui.setText(_("Uruchom WebUI"))
             self.btn_webui.setEnabled(True)
             self.btn_webui_stop.setEnabled(stan["webui"] and stan["webui_dziala"])
 
@@ -1529,18 +1623,18 @@ class MainWindow(QMainWindow):
         #       przeciwieństwie do WebUI nie ma tu trzeciego stanu "Otwórz",
         #       bo LiteLLM to sam endpoint API, nie strona do oglądania.
         self._litellm_zainstalowany = stan["litellm"]
-        self.lbl_litellm_status.setText("zainstalowane ✓" if stan["litellm"] else "nie zainstalowane ✗")
+        self.lbl_litellm_status.setText(_("zainstalowane ✓") if stan["litellm"] else _("nie zainstalowane ✗"))
         litellm_w_toku = bool(self._litellm_worker and self._litellm_worker.isRunning())
         if litellm_w_toku:
             self.btn_litellm.setEnabled(False)
             self.btn_litellm_stop.setEnabled(False)
         else:
             if not stan["litellm"]:
-                self.btn_litellm.setText("Zainstaluj LiteLLM")
+                self.btn_litellm.setText(_("Zainstaluj LiteLLM"))
             elif stan["litellm_dziala"]:
-                self.btn_litellm.setText("Uruchom ponownie")
+                self.btn_litellm.setText(_("Uruchom ponownie"))
             else:
-                self.btn_litellm.setText("Uruchom LiteLLM")
+                self.btn_litellm.setText(_("Uruchom LiteLLM"))
             self.btn_litellm.setEnabled(True)
             self.btn_litellm_stop.setEnabled(stan["litellm"] and stan["litellm_dziala"])
 
@@ -1553,15 +1647,15 @@ class MainWindow(QMainWindow):
         # WHY: to jedyne miejsce w oknie ze statusem Ollamy - usunięty osobny
         #      pill w zakładce "Usługi", żeby nie dublować tej samej informacji.
         if not stan["zainstalowana"]:
-            self.lbl_stat_ollama.setText("nie zainstalowana ✗")
+            self.lbl_stat_ollama.setText(_("nie zainstalowana ✗"))
         elif stan["active"]:
-            self.lbl_stat_ollama.setText("działa ✓")
+            self.lbl_stat_ollama.setText(_("działa ✓"))
         elif stan["api"]:
             self.lbl_stat_ollama.setText("API")
         else:
-            self.lbl_stat_ollama.setText("zatrzymana ✗")
+            self.lbl_stat_ollama.setText(_("zatrzymana ✗"))
 
-        self.lbl_stat_webui.setText("działa ✓" if stan["webui_dziala"] else "zatrzymane ✗")
+        self.lbl_stat_webui.setText(_("działa ✓") if stan["webui_dziala"] else _("zatrzymane ✗"))
 
         vram_lokalnie_gb = sum(m.get("size_vram", 0) for m in stan["zaladowane"]) / (1024 ** 3)
         self.lbl_stat_vram_lokalnie.setText(f"{vram_lokalnie_gb:.1f} GB ({len(stan['zaladowane'])})")
@@ -1571,41 +1665,41 @@ class MainWindow(QMainWindow):
     # --- Instalacja ---
     def zainstaluj_ollame(self):
         if self._instalacja_worker and self._instalacja_worker.isRunning():
-            self.wpis_log("Instalacja już trwa - poczekaj na zakończenie.")
+            self.wpis_log(_("Instalacja już trwa - poczekaj na zakończenie."))
             return
         # WHY: pobieranie i uruchamianie skryptu z internetu jako root - wymagamy
         #      świadomej zgody, tak jak przy usuwaniu modelu.
         odp = QMessageBox.question(
-            self, "Zainstaluj Ollama",
-            "Zainstalować Ollamę teraz?\n\n"
-            "Pobierze i uruchomi oficjalny skrypt instalacyjny z ollama.com\n"
-            "(wymaga uprawnień administratora i połączenia z internetem).",
+            self, _("Zainstaluj Ollama"),
+            _("Zainstalować Ollamę teraz?\n\n"
+              "Pobierze i uruchomi oficjalny skrypt instalacyjny z ollama.com\n"
+              "(wymaga uprawnień administratora i połączenia z internetem)."),
         )
         if odp != QMessageBox.StandardButton.Yes:
             return
-        self.wpis_log("Instaluję Ollamę - to może potrwać kilka minut...")
+        self.wpis_log(_("Instaluję Ollamę - to może potrwać kilka minut..."))
         self.btn_instaluj.setEnabled(False)
-        self._instalacja_worker = self._uruchom_akcje(ollama_zainstaluj, "Instalacja Ollamy")
+        self._instalacja_worker = self._uruchom_akcje(ollama_zainstaluj, _("Instalacja Ollamy"))
 
     def klik_webui(self):
         if self._webui_worker and self._webui_worker.isRunning():
-            self.wpis_log("Operacja na WebUI już trwa - poczekaj na zakończenie.")
+            self.wpis_log(_("Operacja na WebUI już trwa - poczekaj na zakończenie."))
             return
 
         if not self._webui_zainstalowane:
             # WHY: pip ściąga sporo zależności z internetu - jak przy Ollamie,
             #      wymagamy świadomej zgody zamiast robić to bez pytania.
             odp = QMessageBox.question(
-                self, "Zainstaluj Open WebUI",
-                "Zainstalować Open WebUI teraz?\n\n"
-                "Zainstaluje pakiet 'open-webui' przez pip, dla bieżącego użytkownika\n"
-                "(bez Dockera, bez uprawnień administratora - wymaga internetu).",
+                self, _("Zainstaluj Open WebUI"),
+                _("Zainstalować Open WebUI teraz?\n\n"
+                  "Zainstaluje pakiet 'open-webui' przez pip, dla bieżącego użytkownika\n"
+                  "(bez Dockera, bez uprawnień administratora - wymaga internetu)."),
             )
             if odp != QMessageBox.StandardButton.Yes:
                 return
-            self.wpis_log("Instaluję Open WebUI - to może potrwać kilka minut...")
+            self.wpis_log(_("Instaluję Open WebUI - to może potrwać kilka minut..."))
             self.btn_webui.setEnabled(False)
-            self._webui_worker = self._uruchom_akcje(webui_zainstaluj, "Instalacja Open WebUI")
+            self._webui_worker = self._uruchom_akcje(webui_zainstaluj, _("Instalacja Open WebUI"))
             return
 
         if self._webui_dziala:
@@ -1618,9 +1712,9 @@ class MainWindow(QMainWindow):
         #      już automatycznie przeglądarki po starcie - użytkownik czasem
         #      chce tylko odpalić WebUI w tle, bez nowej karty w przeglądarce
         #      za każdym razem; otwiera ją sam przyciskiem "Otwórz WebUI".
-        self.wpis_log("Uruchamiam Open WebUI...")
+        self.wpis_log(_("Uruchamiam Open WebUI..."))
         self.btn_webui.setEnabled(False)
-        worker = ActionWorker(webui_uruchom, "Uruchomienie Open WebUI")
+        worker = ActionWorker(webui_uruchom, _("Uruchomienie Open WebUI"))
         self._webui_worker = worker
         self._workers.append(worker)
 
@@ -1635,23 +1729,23 @@ class MainWindow(QMainWindow):
 
     def zatrzymaj_webui(self):
         if self._webui_worker and self._webui_worker.isRunning():
-            self.wpis_log("Operacja na WebUI już trwa - poczekaj na zakończenie.")
+            self.wpis_log(_("Operacja na WebUI już trwa - poczekaj na zakończenie."))
             return
-        self.wpis_log("Zatrzymuję Open WebUI...")
-        self._webui_worker = self._uruchom_akcje(webui_zatrzymaj, "Zatrzymanie Open WebUI")
+        self.wpis_log(_("Zatrzymuję Open WebUI..."))
+        self._webui_worker = self._uruchom_akcje(webui_zatrzymaj, _("Zatrzymanie Open WebUI"))
 
     # --- Sterowanie usługą ---
     def start_uslugi(self):
-        self.wpis_log("Uruchamiam usługę Ollama...")
-        self._uruchom_akcje(usluga_start, "Start usługi")
+        self.wpis_log(_("Uruchamiam usługę Ollama..."))
+        self._uruchom_akcje(usluga_start, _("Start usługi"))
 
     def stop_uslugi(self):
-        self.wpis_log("Zatrzymuję usługę Ollama...")
-        self._uruchom_akcje(usluga_stop, "Stop usługi")
+        self.wpis_log(_("Zatrzymuję usługę Ollama..."))
+        self._uruchom_akcje(usluga_stop, _("Stop usługi"))
 
     def przelacz_autostart(self, wlacz):
         # WHAT: reakcja na kliknięcie checkboxa autostartu.
-        opis = "Włączenie autostartu" if wlacz else "Wyłączenie autostartu"
+        opis = _("Włączenie autostartu") if wlacz else _("Wyłączenie autostartu")
         self.wpis_log(opis + "...")
         self._uruchom_akcje(lambda: usluga_autostart(wlacz), opis)
 
@@ -1661,18 +1755,26 @@ class MainWindow(QMainWindow):
         # WHY:  pusta wartość = usunięcie zmiennej (powrót do domyślnego
         #       zachowania Ollamy), więc treść pytania rozróżnia oba przypadki.
         if wartosc:
-            tresc = f'Ustawić {nazwa_env} na "{wartosc}" i zrestartować usługę Ollama?'
+            tresc = _('Ustawić {nazwa} na "{wartosc}" i zrestartować usługę Ollama?').format(
+                nazwa=nazwa_env, wartosc=wartosc
+            )
         else:
-            tresc = f"Usunąć {nazwa_env} (wrócić do domyślnego zachowania Ollamy) i zrestartować usługę?"
+            tresc = _("Usunąć {nazwa} (wrócić do domyślnego zachowania Ollamy) i zrestartować usługę?").format(
+                nazwa=nazwa_env
+            )
         odp = QMessageBox.question(
-            self, "Zmiana ustawień Ollamy",
-            tresc + "\n\nWymaga uprawnień administratora - aktualnie załadowane\n"
-            "modele zostaną na chwilę wyładowane z pamięci.",
+            self, _("Zmiana ustawień Ollamy"),
+            tresc + "\n\n" + _(
+                "Wymaga uprawnień administratora - aktualnie załadowane\n"
+                "modele zostaną na chwilę wyładowane z pamięci."
+            ),
         )
         if odp != QMessageBox.StandardButton.Yes:
             return
-        self.wpis_log(f"Ustawiam {nazwa_env}={wartosc or '(domyślne)'}...")
-        self._uruchom_akcje(lambda: usluga_ustaw_zmienna(nazwa_env, wartosc), f"Ustawienie {nazwa_env}")
+        self.wpis_log(_("Ustawiam {nazwa}={wartosc}...").format(nazwa=nazwa_env, wartosc=wartosc or _("(domyślne)")))
+        self._uruchom_akcje(
+            lambda: usluga_ustaw_zmienna(nazwa_env, wartosc), _("Ustawienie {nazwa}").format(nazwa=nazwa_env)
+        )
 
     def ustaw_keep_alive(self):
         self._ustaw_zmienna_ollama("OLLAMA_KEEP_ALIVE", self.pole_keep_alive.text().strip())
@@ -1707,35 +1809,35 @@ class MainWindow(QMainWindow):
         # WHAT: reakcja na kliknięcie checkboxa autostartu WebUI.
         # WHY:  usługa --user, nie systemowa - ale i tak idzie przez _uruchom_akcje
         #       (w tle, bo dopisanie pliku .service + systemctl --user to blokujące I/O).
-        opis = "Włączenie autostartu WebUI" if wlacz else "Wyłączenie autostartu WebUI"
+        opis = _("Włączenie autostartu WebUI") if wlacz else _("Wyłączenie autostartu WebUI")
         self.wpis_log(opis + "...")
         self._uruchom_akcje(lambda: webui_autostart(wlacz), opis)
 
     # --- Agregator modeli (LiteLLM) ---
     def klik_litellm(self):
         if self._litellm_worker and self._litellm_worker.isRunning():
-            self.wpis_log("Operacja na LiteLLM już trwa - poczekaj na zakończenie.")
+            self.wpis_log(_("Operacja na LiteLLM już trwa - poczekaj na zakończenie."))
             return
 
         if not self._litellm_zainstalowany:
             odp = QMessageBox.question(
-                self, "Zainstaluj LiteLLM",
-                "Zainstalować LiteLLM teraz?\n\n"
-                "Zainstaluje pakiet 'litellm[proxy]' przez uv, dla bieżącego użytkownika\n"
-                "(bez Dockera, bez uprawnień administratora - wymaga internetu).",
+                self, _("Zainstaluj LiteLLM"),
+                _("Zainstalować LiteLLM teraz?\n\n"
+                  "Zainstaluje pakiet 'litellm[proxy]' przez uv, dla bieżącego użytkownika\n"
+                  "(bez Dockera, bez uprawnień administratora - wymaga internetu)."),
             )
             if odp != QMessageBox.StandardButton.Yes:
                 return
-            self.wpis_log("Instaluję LiteLLM - to może potrwać kilka minut...")
+            self.wpis_log(_("Instaluję LiteLLM - to może potrwać kilka minut..."))
             self.btn_litellm.setEnabled(False)
-            self._litellm_worker = self._uruchom_akcje(litellm_zainstaluj, "Instalacja LiteLLM")
+            self._litellm_worker = self._uruchom_akcje(litellm_zainstaluj, _("Instalacja LiteLLM"))
             return
 
         # WHY: config.yaml generujemy tuż przed (re)startem z AKTUALNEJ listy
         #      serwerów - dodanie/usunięcie hosta widać dopiero po tym kliknięciu.
-        self.wpis_log("Uruchamiam LiteLLM...")
+        self.wpis_log(_("Uruchamiam LiteLLM..."))
         self.btn_litellm.setEnabled(False)
-        worker = ActionWorker(lambda: litellm_uruchom(self.serwery), "Uruchomienie LiteLLM")
+        worker = ActionWorker(lambda: litellm_uruchom(self.serwery), _("Uruchomienie LiteLLM"))
         self._litellm_worker = worker
         self._workers.append(worker)
 
@@ -1744,7 +1846,7 @@ class MainWindow(QMainWindow):
             if sukces:
                 # WHY: przypomnienie w dzienniku, gdzie podłączyć klienta -
                 #      łatwiej znaleźć w logu niż wracać do zakładki po adres.
-                self.wpis_log(f"Adres dla klientów (np. Continue): {LITELLM_URL}/v1")
+                self.wpis_log(_("Adres dla klientów (np. Continue): {adres}").format(adres=f"{LITELLM_URL}/v1"))
             if w in self._workers:
                 self._workers.remove(w)
             QTimer.singleShot(1200, self.odswiez)
@@ -1754,14 +1856,14 @@ class MainWindow(QMainWindow):
 
     def zatrzymaj_litellm(self):
         if self._litellm_worker and self._litellm_worker.isRunning():
-            self.wpis_log("Operacja na LiteLLM już trwa - poczekaj na zakończenie.")
+            self.wpis_log(_("Operacja na LiteLLM już trwa - poczekaj na zakończenie."))
             return
-        self.wpis_log("Zatrzymuję LiteLLM...")
-        self._litellm_worker = self._uruchom_akcje(litellm_zatrzymaj, "Zatrzymanie LiteLLM")
+        self.wpis_log(_("Zatrzymuję LiteLLM..."))
+        self._litellm_worker = self._uruchom_akcje(litellm_zatrzymaj, _("Zatrzymanie LiteLLM"))
 
     def przelacz_litellm_autostart(self, wlacz):
         # WHY: jw. co przy WebUI - usługa --user, ale i tak przez _uruchom_akcje (blokujące I/O).
-        opis = "Włączenie autostartu LiteLLM" if wlacz else "Wyłączenie autostartu LiteLLM"
+        opis = _("Włączenie autostartu LiteLLM") if wlacz else _("Wyłączenie autostartu LiteLLM")
         self.wpis_log(opis + "...")
         self._uruchom_akcje(lambda: litellm_autostart(wlacz, self.serwery), opis)
 
@@ -1775,7 +1877,7 @@ class MainWindow(QMainWindow):
         if self._agregator_worker and self._agregator_worker.isRunning():
             return
         self.lista_agregator.clear()
-        self.lista_agregator.addItem("Sprawdzam hosty...")
+        self.lista_agregator.addItem(_("Sprawdzam hosty..."))
         self.btn_odswiez_agregator.setEnabled(False)
         worker = AgregatorWorker(self.serwery)
         self._agregator_worker = worker
@@ -1784,7 +1886,7 @@ class MainWindow(QMainWindow):
             self.btn_odswiez_agregator.setEnabled(True)
             self.lista_agregator.clear()
             if not wpisy:
-                self.lista_agregator.addItem("Brak dostępnych modeli (hosty nieosiągalne albo puste).")
+                self.lista_agregator.addItem(_("Brak dostępnych modeli (hosty nieosiągalne albo puste)."))
                 return
             for nazwa_hosta, model, adres in wpisy:
                 self.lista_agregator.addItem(f"{model}  —  {nazwa_hosta} ({adres})")
@@ -1807,13 +1909,15 @@ class MainWindow(QMainWindow):
             return
         # WHY: usuwanie jest nieodwracalne - wymagamy potwierdzenia.
         odp = QMessageBox.question(
-            self, "Usuń model",
-            f"Na pewno usunąć model:\n\n{model}\n\nTej operacji nie da się cofnąć.",
+            self, _("Usuń model"),
+            _("Na pewno usunąć model:\n\n{model}\n\nTej operacji nie da się cofnąć.").format(model=model),
         )
         if odp != QMessageBox.StandardButton.Yes:
             return
-        self.wpis_log(f"Usuwam model: {model}")
-        self._uruchom_akcje(lambda: self.client.delete_model(model), f"Usunięcie {model}")
+        self.wpis_log(_("Usuwam model: {model}").format(model=model))
+        self._uruchom_akcje(
+            lambda: self.client.delete_model(model), _("Usunięcie {model}").format(model=model)
+        )
 
     def pobierz_model(self):
         model = self.combo_modele.currentText().strip()
@@ -1821,7 +1925,7 @@ class MainWindow(QMainWindow):
             return
         # WHY: jedno pobieranie naraz - prościej i nie obciąża łącza/dysku podwójnie.
         if self.pull_worker and self.pull_worker.isRunning():
-            self.wpis_log("Pobieranie już trwa - poczekaj na zakończenie.")
+            self.wpis_log(_("Pobieranie już trwa - poczekaj na zakończenie."))
             return
 
         self.btn_pull.setEnabled(False)
@@ -1829,7 +1933,7 @@ class MainWindow(QMainWindow):
         self.pasek_postepu.setRange(0, 100)
         self.pasek_postepu.setValue(0)
         self._ostatni_status = None
-        self.wpis_log(f"Rozpoczynam pobieranie: {model}")
+        self.wpis_log(_("Rozpoczynam pobieranie: {model}").format(model=model))
 
         self.pull_worker = PullWorker(self.client, model)
         self.pull_worker.postep.connect(self._postep_pull)
