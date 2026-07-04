@@ -33,14 +33,14 @@ from PyQt6.QtWidgets import (
     QLabel, QPushButton, QListWidget, QListWidgetItem, QProgressBar, QTabWidget,
     QGroupBox,
     QPlainTextEdit, QComboBox, QMessageBox, QCheckBox,
-    QDialog, QLineEdit,
+    QDialog, QLineEdit, QScrollArea,
 )
 
 # --- Konfiguracja ---------------------------------------------------------
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.3.4"
+WERSJA = "0.3.8"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -143,11 +143,14 @@ def _systemctl_query(arg):
         return "unknown"
 
 
-def _pkexec(args):
+def _pkexec(args, wejscie=None):
     # WHAT: uruchamia polecenie jako root przez polkit.
     # WHY:  pkexec pokazuje graficzny dialog KDE z prośbą o hasło - nie potrzeba
     #       terminala ani sudo. Rzucamy wyjątek przy błędzie, żeby worker go złapał.
-    r = subprocess.run(["pkexec"] + args, capture_output=True, text=True)
+    #       Opcjonalne 'wejscie' idzie na STDIN procesu (np. treść pliku do
+    #       zapisania) - bezpieczniejsze niż wstrzykiwanie tekstu do argumentów
+    #       powłoki, bo w ogóle nie dotyka parsera 'sh'.
+    r = subprocess.run(["pkexec"] + args, input=wejscie, capture_output=True, text=True)
     if r.returncode != 0:
         # WHY: kod 126 = użytkownik anulował/brak uprawnień, 127 = błąd autoryzacji.
         raise RuntimeError(r.stderr.strip() or f"pkexec: kod wyjścia {r.returncode}")
@@ -165,6 +168,52 @@ def usluga_autostart(wlacz):
     # WHAT: włącza lub wyłącza automatyczny start po restarcie systemu.
     akcja = "enable" if wlacz else "disable"
     _pkexec(["systemctl", akcja, SERVICE_NAME])
+
+
+def _usluga_override_sciezka():
+    return Path("/etc/systemd/system") / f"{SERVICE_NAME}.service.d" / "override.conf"
+
+
+def _usluga_env_wszystkie():
+    # WHAT: czyta WSZYSTKIE zmienne środowiskowe zapisane w override.conf.
+    # WHY:  sam ODCZYT pliku w /etc nie wymaga roota - tylko jego ZMIANA (patrz
+    #       usluga_ustaw_zmienna). Parsujemy format, który sami zapisujemy -
+    #       nie trzeba obsługiwać dowolnego syntaksu systemd.
+    try:
+        tresc = _usluga_override_sciezka().read_text()
+    except OSError:
+        return {}
+    zmienne = {}
+    for linia in tresc.splitlines():
+        linia = linia.strip().removeprefix("Environment=").strip('"')
+        if "=" in linia:
+            klucz, wartosc = linia.split("=", 1)
+            zmienne[klucz] = wartosc
+    return zmienne
+
+
+def usluga_ustaw_zmienna(nazwa, wartosc):
+    # WHAT: dopisuje/zmienia JEDNĄ zmienną środowiskową usługi Ollama w
+    #       override.conf (zachowując resztę już ustawionych) i restartuje usługę.
+    #       Pusta wartość = usuń zmienną (wróć do domyślnego zachowania Ollamy).
+    # WHY:  override może mieć wiele linii Environment= (KEEP_ALIVE,
+    #       CONTEXT_LENGTH, ...) - nadpisanie całego pliku przy KAŻDEJ zmianie
+    #       usunęłoby wcześniej ustawione zmienne. Gotowa treść pliku (z
+    #       wartością wpisaną przez użytkownika) leci na STDIN procesu roota,
+    #       nie jako argument powłoki - żaden wpisany tekst nie ma szansy
+    #       dotknąć parsera 'sh', bo w ogóle nie trafia do wiersza poleceń.
+    zmienne = _usluga_env_wszystkie()
+    if wartosc:
+        zmienne[nazwa] = wartosc
+    else:
+        zmienne.pop(nazwa, None)
+    tresc = "[Service]\n" + "".join(f'Environment="{k}={v}"\n' for k, v in zmienne.items())
+    skrypt = (
+        'mkdir -p "$(dirname "$1")" && cat > "$1" && '
+        "systemctl daemon-reload && "
+        f"systemctl restart {SERVICE_NAME}"
+    )
+    _pkexec(["sh", "-c", skrypt, "sh", str(_usluga_override_sciezka())], wejscie=tresc)
 
 
 def ollama_zainstalowana():
@@ -623,6 +672,7 @@ class RefreshWorker(QThread):
         zainstalowana = ollama_zainstalowana()
         active = _systemctl_query("is-active") == "active"
         enabled = _systemctl_query("is-enabled") == "enabled"
+        env_ollama = _usluga_env_wszystkie()  # WHY: jedno czytanie override.conf - zakładka "Zaawansowane"
         api = self.client.api_dziala()
         modele = self.client.list_models() if api else []
         zaladowane = self.client.list_loaded() if api else []
@@ -640,6 +690,7 @@ class RefreshWorker(QThread):
             "zainstalowana": zainstalowana,
             "active": active,
             "enabled": enabled,
+            "env_ollama": env_ollama,
             "api": api,
             "models": modele,
             "zaladowane": zaladowane,
@@ -810,8 +861,9 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(f"Ollama Manager {WERSJA}")
         # WHY: zakładka "Usługi" mieści sterowanie usługą + Open WebUI jedna pod
-        #      drugą, więc potrzeba nieco więcej wysokości niż przy samych kartach.
-        self.setMinimumSize(760, 600)
+        #      drugą, a zakładka "Agregator modeli" dwie karty jedna pod drugą -
+        #      obu brakowało miejsca przy poprzedniej wysokości (600px).
+        self.setMinimumSize(760, 700)
         self._buduj_ui()
 
         # WHAT: cykliczne odświeżanie co 10 s.
@@ -823,8 +875,9 @@ class MainWindow(QMainWindow):
 
     # --- Budowa interfejsu ---
     def _buduj_ui(self):
-        # WHAT: pasek serwera + pasek statystyk na górze, pod nim 3 zakładki
-        #       (Usługi / Modele / Agregator modeli), dziennik na dole na całą szerokość.
+        # WHAT: pasek serwera + pasek statystyk na górze, pod nim 4 zakładki
+        #       (Usługi / Modele / Agregator modeli / Zaawansowane), dziennik
+        #       na dole na całą szerokość.
         # WHY:  finalny układ po trzech podejściach w Claude Design - zakładki
         #       trzymają wysokość okna w ryzach (jedna zakładka = jeden ekran),
         #       a pasek statystyk daje podgląd stanu bez klikania w ogóle.
@@ -866,6 +919,7 @@ class MainWindow(QMainWindow):
         zakladki.addTab(self._zakladka_uslugi(), "Usługi")
         zakladki.addTab(self._zakladka_modele_lokalne(), "Modele")
         zakladki.addTab(self._zakladka_agregator(), "Agregator modeli")
+        zakladki.addTab(self._zakladka_zaawansowane(), "Zaawansowane")
         layout.addWidget(zakladki, 1)
 
         # === Dziennik - na dole, pod zakładkami =========================
@@ -913,6 +967,84 @@ class MainWindow(QMainWindow):
             pasek.addWidget(widget_z_prawej)
         return pasek
 
+    def _wiersz_ollama_env(self, tytul, opis, placeholder, metoda_zastosuj):
+        # WHAT: wspólny układ "tytuł + krótki opis + wąskie pole + Zastosuj +
+        #       aktualna wartość" dla jednej zmiennej środowiskowej Ollamy.
+        # WHY:  sześć zmiennych w zakładce "Zaawansowane", ten sam wzorzec -
+        #       jedna funkcja zamiast sześciu kopii tego samego układu.
+        uklad = QVBoxLayout()
+        naglowek = QLabel(tytul)
+        czcionka = naglowek.font()
+        czcionka.setBold(True)
+        naglowek.setFont(czcionka)
+        uklad.addWidget(naglowek)
+        lbl_opis = QLabel(opis)
+        lbl_opis.setWordWrap(True)
+        uklad.addWidget(lbl_opis)
+        wiersz = QHBoxLayout()
+        pole = QLineEdit()
+        pole.setPlaceholderText(placeholder)
+        pole.setMaximumWidth(120)
+        przycisk = QPushButton("Zastosuj")
+        przycisk.clicked.connect(metoda_zastosuj)
+        wiersz.addWidget(pole)
+        wiersz.addWidget(przycisk)
+        wiersz.addStretch(1)
+        uklad.addLayout(wiersz)
+        lbl_aktualnie = QLabel("aktualnie: sprawdzam...")
+        uklad.addWidget(lbl_aktualnie)
+        return uklad, pole, przycisk, lbl_aktualnie
+
+    def _wiersz_ollama_env_combo(self, tytul, opis, opcje, metoda_zastosuj):
+        # WHAT: to samo co _wiersz_ollama_env, tylko z QComboBox zamiast pola
+        #       tekstowego - dla zmiennych o skończonym zbiorze sensownych wartości.
+        uklad = QVBoxLayout()
+        naglowek = QLabel(tytul)
+        czcionka = naglowek.font()
+        czcionka.setBold(True)
+        naglowek.setFont(czcionka)
+        uklad.addWidget(naglowek)
+        lbl_opis = QLabel(opis)
+        lbl_opis.setWordWrap(True)
+        uklad.addWidget(lbl_opis)
+        wiersz = QHBoxLayout()
+        combo = QComboBox()
+        for etykieta, wartosc in opcje:
+            combo.addItem(etykieta, wartosc)
+        przycisk = QPushButton("Zastosuj")
+        przycisk.clicked.connect(metoda_zastosuj)
+        wiersz.addWidget(combo)
+        wiersz.addWidget(przycisk)
+        wiersz.addStretch(1)
+        uklad.addLayout(wiersz)
+        lbl_aktualnie = QLabel("aktualnie: sprawdzam...")
+        uklad.addWidget(lbl_aktualnie)
+        return uklad, combo, przycisk, lbl_aktualnie
+
+    def _wiersz_ollama_env_checkbox(self, tytul, opis, etykieta_checkbox, metoda_zastosuj):
+        # WHAT: to samo co _wiersz_ollama_env, tylko z QCheckBox - dla zmiennych
+        #       0/1 (włącz/wyłącz), gdzie to prostsze niż rozwijana lista.
+        uklad = QVBoxLayout()
+        naglowek = QLabel(tytul)
+        czcionka = naglowek.font()
+        czcionka.setBold(True)
+        naglowek.setFont(czcionka)
+        uklad.addWidget(naglowek)
+        lbl_opis = QLabel(opis)
+        lbl_opis.setWordWrap(True)
+        uklad.addWidget(lbl_opis)
+        wiersz = QHBoxLayout()
+        checkbox = QCheckBox(etykieta_checkbox)
+        przycisk = QPushButton("Zastosuj")
+        przycisk.clicked.connect(metoda_zastosuj)
+        wiersz.addWidget(checkbox)
+        wiersz.addWidget(przycisk)
+        wiersz.addStretch(1)
+        uklad.addLayout(wiersz)
+        lbl_aktualnie = QLabel("aktualnie: sprawdzam...")
+        uklad.addWidget(lbl_aktualnie)
+        return uklad, checkbox, przycisk, lbl_aktualnie
+
     def _zakladka_uslugi(self):
         # WHAT: dwie kolumny - lewa: Sterowanie i Open WebUI jedna pod drugą
         #       (obie "usługi w tle" tej aplikacji); prawa: Załadowane do VRAM
@@ -946,6 +1078,7 @@ class MainWindow(QMainWindow):
         self.chk_autostart = QCheckBox("Uruchamiaj automatycznie przy starcie systemu")
         self.chk_autostart.toggled.connect(self.przelacz_autostart)
         uk_ollama.addWidget(self.chk_autostart)
+
         lewa_kolumna.addWidget(karta_ollama)
 
         # --- Open WebUI, w takiej samej ramce (QGroupBox) jak Sterowanie ---
@@ -1106,6 +1239,111 @@ class MainWindow(QMainWindow):
 
         return strona
 
+    def _zakladka_zaawansowane(self):
+        # WHAT: zmienne środowiskowe usługi Ollama, które nie mieszczą się w
+        #       zwykłej karcie "Ollama" bez zamiany jej w ścianę tekstu.
+        # WHY:  osobna zakładka zamiast kolejnych pól w zakładce "Usługi" -
+        #       to ustawienia dla kogoś, kto świadomie tuninguje sprzęt (np.
+        #       BC-250 z ograniczonym VRAM), nie coś, co widać na pierwszy rzut oka.
+        #       Dotyczą WYŁĄCZNIE lokalnej Ollamy - tak jak reszta sterowania usługą.
+        #       WHY QScrollArea: sześć zmiennych z opisami to więcej treści niż
+        #       mieści jedno okno - lepiej przewinąć niż obcinać dolne pozycje.
+        strona = QWidget()
+        layout = QVBoxLayout(strona)
+
+        karta = QGroupBox("Ollama - zmienne środowiskowe usługi")
+        uk = QVBoxLayout(karta)
+        lbl_wstep = QLabel(
+            "Każda zmiana zapisuje override systemd i restartuje usługę Ollama "
+            "(wymaga uprawnień administratora - załadowane modele na chwilę znikną "
+            "z pamięci). Puste pole + Zastosuj = powrót do domyślnego zachowania Ollamy."
+        )
+        lbl_wstep.setWordWrap(True)
+        uk.addWidget(lbl_wstep)
+
+        uklad, self.pole_keep_alive, self.btn_keep_alive, self.lbl_keep_alive_aktualny = self._wiersz_ollama_env(
+            "OLLAMA_KEEP_ALIVE",
+            "Jak długo model zostaje w pamięci po ostatnim zapytaniu, zanim zostanie "
+            "wyładowany (domyślnie kilka minut). np. 30m, 1h, -1 (zawsze), 0 (od razu).",
+            "np. 30m",
+            self.ustaw_keep_alive,
+        )
+        uk.addLayout(uklad)
+
+        uklad, self.pole_context_length, self.btn_context_length, self.lbl_context_length_aktualny = self._wiersz_ollama_env(
+            "OLLAMA_CONTEXT_LENGTH",
+            "Rozmiar okna kontekstu w tokenach (domyślnie 4096 - za mało do pracy "
+            "agentowej w Continue/OpenCode).",
+            "np. 32768",
+            self.ustaw_context_length,
+        )
+        uk.addLayout(uklad)
+
+        uklad, self.pole_max_loaded, self.btn_max_loaded, self.lbl_max_loaded_aktualny = self._wiersz_ollama_env(
+            "OLLAMA_MAX_LOADED_MODELS",
+            "Ile modeli może być jednocześnie załadowanych do pamięci (domyślnie "
+            "3x liczba GPU).",
+            "np. 1",
+            self.ustaw_max_loaded_models,
+        )
+        uk.addLayout(uklad)
+
+        uklad, self.pole_num_parallel, self.btn_num_parallel, self.lbl_num_parallel_aktualny = self._wiersz_ollama_env(
+            "OLLAMA_NUM_PARALLEL",
+            "Ile równoległych zapytań obsłuży jeden załadowany model naraz.",
+            "np. 1",
+            self.ustaw_num_parallel,
+        )
+        uk.addLayout(uklad)
+
+        uklad, self.combo_flash_attention, self.btn_flash_attention, self.lbl_flash_attention_aktualny = (
+            self._wiersz_ollama_env_combo(
+                "OLLAMA_FLASH_ATTENTION",
+                "Zmniejsza zużycie pamięci przy dłuższym kontekście, jeśli model i "
+                "sprzęt to wspierają.",
+                [("domyślne (auto)", ""), ("włączone", "1"), ("wyłączone", "0")],
+                self.ustaw_flash_attention,
+            )
+        )
+        uk.addLayout(uklad)
+
+        uklad, self.combo_kv_cache, self.btn_kv_cache, self.lbl_kv_cache_aktualny = self._wiersz_ollama_env_combo(
+            "OLLAMA_KV_CACHE_TYPE",
+            "Kwantyzacja pamięci podręcznej kontekstu - q8_0 to ok. -50% zużycia "
+            "VRAM przy pomijalnej stracie jakości.",
+            [("domyślne (f16)", ""), ("q8_0", "q8_0"), ("q4_0", "q4_0")],
+            self.ustaw_kv_cache_type,
+        )
+        uk.addLayout(uklad)
+
+        uklad, self.chk_vulkan, self.btn_vulkan, self.lbl_vulkan_aktualny = self._wiersz_ollama_env_checkbox(
+            "OLLAMA_VULKAN",
+            "Backend Vulkan zamiast ROCm - szersza kompatybilność z kartami AMD "
+            "bez pełnego wsparcia ROCm (np. BC-250).",
+            "Włącz Vulkan",
+            self.ustaw_vulkan,
+        )
+        uk.addLayout(uklad)
+
+        uklad, self.chk_igpu, self.btn_igpu, self.lbl_igpu_aktualny = self._wiersz_ollama_env_checkbox(
+            "OLLAMA_IGPU_ENABLE",
+            "Czy Ollama może korzystać ze zintegrowanego GPU (iGPU) - domyślnie "
+            "włączone. Odznacz, żeby wymusić pominięcie iGPU (np. przy problemach "
+            "na jednolitej architekturze CPU+GPU jak BC-250).",
+            "Włącz iGPU (domyślnie włączone)",
+            self.ustaw_igpu,
+        )
+        uk.addLayout(uklad)
+
+        layout.addWidget(karta)
+        layout.addStretch(1)
+
+        przewijanie = QScrollArea()
+        przewijanie.setWidget(strona)
+        przewijanie.setWidgetResizable(True)
+        przewijanie.setFrameShape(QScrollArea.Shape.NoFrame)  # WHY: bez podwójnej ramki (QScrollArea + karta)
+        return przewijanie
+
     # --- Przełącznik serwera ---
     def _wypelnij_combo_serwer(self):
         # WHY: blokujemy sygnały na czas wypełniania - inaczej samo dodawanie
@@ -1174,6 +1412,42 @@ class MainWindow(QMainWindow):
         self.refresh_worker.wynik.connect(self._po_odswiezeniu)
         self.refresh_worker.start()
 
+    def _odswiez_zakladke_zaawansowane(self, stan):
+        # WHAT: pokazuje aktualne wartości zmiennych środowiskowych Ollamy i
+        #       blokuje pola, gdy Ollama nie jest zainstalowana (restart nie ma sensu).
+        env = stan["env_ollama"]
+        for widget in (
+            self.pole_keep_alive, self.btn_keep_alive,
+            self.pole_context_length, self.btn_context_length,
+            self.pole_max_loaded, self.btn_max_loaded,
+            self.pole_num_parallel, self.btn_num_parallel,
+            self.combo_flash_attention, self.btn_flash_attention,
+            self.combo_kv_cache, self.btn_kv_cache,
+            self.chk_vulkan, self.btn_vulkan,
+            self.chk_igpu, self.btn_igpu,
+        ):
+            widget.setEnabled(stan["zainstalowana"])
+
+        self.lbl_keep_alive_aktualny.setText(f"aktualnie: {env.get('OLLAMA_KEEP_ALIVE') or 'domyślne'}")
+        self.lbl_context_length_aktualny.setText(
+            f"aktualnie: {env.get('OLLAMA_CONTEXT_LENGTH') or 'domyślne (4096)'}"
+        )
+        self.lbl_max_loaded_aktualny.setText(f"aktualnie: {env.get('OLLAMA_MAX_LOADED_MODELS') or 'domyślne'}")
+        self.lbl_num_parallel_aktualny.setText(f"aktualnie: {env.get('OLLAMA_NUM_PARALLEL') or 'domyślne'}")
+        self.lbl_flash_attention_aktualny.setText(
+            f"aktualnie: {env.get('OLLAMA_FLASH_ATTENTION') or 'domyślne (auto)'}"
+        )
+        self.lbl_kv_cache_aktualny.setText(f"aktualnie: {env.get('OLLAMA_KV_CACHE_TYPE') or 'domyślne (f16)'}")
+        # WHY: checkbox nie ma osobnego sygnału do auto-zastosowania (jak
+        #      chk_autostart) - synchronizacja stanu przy odświeżeniu nie
+        #      wywoła żadnej akcji, więc nie trzeba blockSignals.
+        self.chk_vulkan.setChecked(env.get("OLLAMA_VULKAN") == "1")
+        self.lbl_vulkan_aktualny.setText(f"aktualnie: {env.get('OLLAMA_VULKAN') or 'domyślne (0)'}")
+        # WHY: OLLAMA_IGPU_ENABLE domyślnie WŁĄCZONE (w przeciwieństwie do Vulkana) -
+        #      checkbox ma być zaznaczony, dopóki ktoś jawnie nie ustawi "false".
+        self.chk_igpu.setChecked(env.get("OLLAMA_IGPU_ENABLE") != "false")
+        self.lbl_igpu_aktualny.setText(f"aktualnie: {env.get('OLLAMA_IGPU_ENABLE') or 'domyślne (włączone)'}")
+
     def _po_odswiezeniu(self, stan):
         # WHAT: przełóż stan usługi/API na wygląd okna.
         # WHY: ten sam wzorzec statusu instalacji co przy karcie Open WebUI -
@@ -1203,6 +1477,8 @@ class MainWindow(QMainWindow):
             self.chk_autostart.blockSignals(True)
             self.chk_autostart.setChecked(stan["enabled"])
             self.chk_autostart.blockSignals(False)
+
+        self._odswiez_zakladke_zaawansowane(stan)
 
         # Odśwież listę modeli, zachowując zaznaczenie jeśli się da
         zaznaczony = self._wybrany_model()
@@ -1378,6 +1654,54 @@ class MainWindow(QMainWindow):
         opis = "Włączenie autostartu" if wlacz else "Wyłączenie autostartu"
         self.wpis_log(opis + "...")
         self._uruchom_akcje(lambda: usluga_autostart(wlacz), opis)
+
+    def _ustaw_zmienna_ollama(self, nazwa_env, wartosc):
+        # WHAT: wspólne potwierdzenie + wywołanie dla wszystkich pól w zakładce
+        #       "Zaawansowane" - jedna metoda zamiast sześciu prawie identycznych.
+        # WHY:  pusta wartość = usunięcie zmiennej (powrót do domyślnego
+        #       zachowania Ollamy), więc treść pytania rozróżnia oba przypadki.
+        if wartosc:
+            tresc = f'Ustawić {nazwa_env} na "{wartosc}" i zrestartować usługę Ollama?'
+        else:
+            tresc = f"Usunąć {nazwa_env} (wrócić do domyślnego zachowania Ollamy) i zrestartować usługę?"
+        odp = QMessageBox.question(
+            self, "Zmiana ustawień Ollamy",
+            tresc + "\n\nWymaga uprawnień administratora - aktualnie załadowane\n"
+            "modele zostaną na chwilę wyładowane z pamięci.",
+        )
+        if odp != QMessageBox.StandardButton.Yes:
+            return
+        self.wpis_log(f"Ustawiam {nazwa_env}={wartosc or '(domyślne)'}...")
+        self._uruchom_akcje(lambda: usluga_ustaw_zmienna(nazwa_env, wartosc), f"Ustawienie {nazwa_env}")
+
+    def ustaw_keep_alive(self):
+        self._ustaw_zmienna_ollama("OLLAMA_KEEP_ALIVE", self.pole_keep_alive.text().strip())
+
+    def ustaw_context_length(self):
+        self._ustaw_zmienna_ollama("OLLAMA_CONTEXT_LENGTH", self.pole_context_length.text().strip())
+
+    def ustaw_max_loaded_models(self):
+        self._ustaw_zmienna_ollama("OLLAMA_MAX_LOADED_MODELS", self.pole_max_loaded.text().strip())
+
+    def ustaw_num_parallel(self):
+        self._ustaw_zmienna_ollama("OLLAMA_NUM_PARALLEL", self.pole_num_parallel.text().strip())
+
+    def ustaw_flash_attention(self):
+        self._ustaw_zmienna_ollama("OLLAMA_FLASH_ATTENTION", self.combo_flash_attention.currentData())
+
+    def ustaw_kv_cache_type(self):
+        self._ustaw_zmienna_ollama("OLLAMA_KV_CACHE_TYPE", self.combo_kv_cache.currentData())
+
+    def ustaw_vulkan(self):
+        # WHY: to zwykły przełącznik 0/1, nie "ustaw albo wróć do domyślnego"
+        #      jak pola tekstowe - odznaczenie zapisuje jawne "0", a nie usuwa zmienną.
+        self._ustaw_zmienna_ollama("OLLAMA_VULKAN", "1" if self.chk_vulkan.isChecked() else "0")
+
+    def ustaw_igpu(self):
+        # WHY: odwrotnie niż Vulkan - domyślnie WŁĄCZONE, więc zaznaczenie
+        #      usuwa zmienną (powrót do domyślnego "włączone"), a odznaczenie
+        #      zapisuje jawne "false", żeby wymusić wyłączenie iGPU.
+        self._ustaw_zmienna_ollama("OLLAMA_IGPU_ENABLE", "" if self.chk_igpu.isChecked() else "false")
 
     def przelacz_webui_autostart(self, wlacz):
         # WHAT: reakcja na kliknięcie checkboxa autostartu WebUI.

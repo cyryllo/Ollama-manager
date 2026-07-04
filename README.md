@@ -54,6 +54,14 @@ python3 ollama_manager.py
   serwerów z listy przełącznika — VS Code/Continue wskazuje tylko na ten adres
 - Podgląd, jakie modele i hosty trafią do configu, przed uruchomieniem
 
+**Zaawansowane (zmienne środowiskowe Ollamy)**
+- `OLLAMA_KEEP_ALIVE` — jak długo model zostaje w pamięci po ostatnim zapytaniu
+- `OLLAMA_CONTEXT_LENGTH` — rozmiar okna kontekstu (domyślne 4096 za mało do pracy agentowej)
+- `OLLAMA_MAX_LOADED_MODELS`, `OLLAMA_NUM_PARALLEL`, `OLLAMA_FLASH_ATTENTION`, `OLLAMA_KV_CACHE_TYPE`
+- `OLLAMA_VULKAN` — backend Vulkan zamiast ROCm (przydatne na kartach AMD bez pełnego wsparcia ROCm, np. BC-250)
+- `OLLAMA_IGPU_ENABLE` — czy Ollama może korzystać ze zintegrowanego GPU (domyślnie włączone)
+- Każda zmiana zapisuje override systemd i restartuje usługę — z poziomu okna, bez edycji plików ręcznie
+
 **Pasek statystyk**
 - Status Ollamy i Open WebUI
 - Zużycie VRAM na aktualnie wybranym serwerze
