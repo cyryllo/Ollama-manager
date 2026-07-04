@@ -16,11 +16,14 @@ on KDE — no terminal, no Docker. Everything runs locally, on your LAN.
 ## Installation and running
 
 **As a menu app, no root (recommended)** — installs dependencies via pip, copies the app to
-`~/.local/share/ollama-manager` and adds a menu entry (Utilities section):
+`~/.local/share/ollama-manager` and adds a menu entry (Utilities section). Detects an existing
+install and offers to update/reinstall accordingly:
 
 ```
 ./install.sh
 ```
+
+Uninstall with `./install.sh --uninstall`.
 
 **As a `.deb` package (Debian/Ubuntu)** — dependencies come from `apt`, easy to uninstall:
 

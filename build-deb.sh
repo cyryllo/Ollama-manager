@@ -1,90 +1,92 @@
 #!/bin/bash
 # =============================================================================
-#  Budowa pakietu .deb dla Ollama Managera.
+#  Build a .deb package for Ollama Manager.
 #
-#  WHAT: pakuje ollama_manager.py + lang/ do /usr/share, dorzuca skrypt
-#        startowy w /usr/bin i wpis .desktop w /usr/share/applications,
-#        składa to w jeden plik .deb przez dpkg-deb.
-#  WHY:  prosty ręczny DEBIAN/control + dpkg-deb --build zamiast pełnego
-#        debhelper/dh-python - ten projekt to jeden plik Pythona, nie
-#        potrzebuje ciężkiego toolchainu do budowania pakietów (zasada
-#        "prostota ponad wszystko", patrz CLAUDE.md). Zależności idą jako
-#        pakiety apt (Depends), NIE pip jak w install.sh - to standard na
-#        Debianie/Ubuntu i unika mieszania pip-a z systemowym Pythonem.
+#  WHAT: packs ollama_manager.py + lang/ into /usr/share, adds a launcher
+#        script in /usr/bin and a .desktop entry in /usr/share/applications,
+#        then assembles it all into a single .deb via dpkg-deb.
+#  WHY:  a plain hand-written DEBIAN/control + dpkg-deb --build instead of
+#        full debhelper/dh-python - this project is a single Python file,
+#        it doesn't need a heavy packaging toolchain ("simplicity above all",
+#        see CLAUDE.md). Dependencies go through apt (Depends), NOT pip like
+#        install.sh - that's the standard on Debian/Ubuntu and avoids mixing
+#        pip with the system Python.
 #
-#  Uruchomienie: ./build-deb.sh
-#  Wynik: ollama-manager_<wersja>_all.deb w katalogu repo.
-#  Instalacja wyniku: sudo apt install ./ollama-manager_<wersja>_all.deb
+#  Run: ./build-deb.sh
+#  Output: ollama-manager_<version>_all.deb in the repo directory.
+#  Installing the result: sudo apt install ./ollama-manager_<version>_all.deb
 # =============================================================================
 set -euo pipefail
 
-NAZWA_PAKIETU="ollama-manager"
-KATALOG_SKRYPTU="$(dirname "$(readlink -f "$0")")"
-cd "$KATALOG_SKRYPTU"
+PACKAGE_NAME="ollama-manager"
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+cd "$SCRIPT_DIR"
 
 if [ ! -f ollama_manager.py ]; then
-    echo "Nie widzę ollama_manager.py obok build-deb.sh - uruchom skrypt z katalogu repo." >&2
+    echo "Can't find ollama_manager.py next to build-deb.sh - run this script from the repo directory." >&2
     exit 1
 fi
 
 if ! command -v dpkg-deb >/dev/null 2>&1; then
-    echo "Brak dpkg-deb - ten skrypt działa tylko na Debianie/Ubuntu (i pochodnych)." >&2
+    echo "dpkg-deb not found - this script only works on Debian/Ubuntu (and derivatives)." >&2
     exit 1
 fi
 
-# WHY: wersja pakietu ZAWSZE zsynchronizowana ze stałą WERSJA w kodzie -
-#      jedno miejsce prawdy, tak jak przy każdej innej zmianie wersji.
-WERSJA="$(sed -n 's/^WERSJA = "\(.*\)"/\1/p' ollama_manager.py)"
-if [ -z "$WERSJA" ]; then
-    echo "Nie udało się wyciągnąć WERSJA z ollama_manager.py" >&2
+# WHY: package version ALWAYS synced with the WERSJA constant in the code -
+#      a single source of truth, same as for any other version change.
+VERSION="$(sed -n 's/^WERSJA = "\(.*\)"/\1/p' ollama_manager.py)"
+if [ -z "$VERSION" ]; then
+    echo "Could not extract WERSJA from ollama_manager.py" >&2
     exit 1
 fi
 
-echo "Buduję pakiet ${NAZWA_PAKIETU} ${WERSJA}..."
+echo "Building package ${PACKAGE_NAME} ${VERSION}..."
 
-KATALOG_BUILD="$(mktemp -d)"
-trap 'rm -rf "$KATALOG_BUILD"' EXIT
+BUILD_DIR="$(mktemp -d)"
+trap 'rm -rf "$BUILD_DIR"' EXIT
 
-# --- Struktura pakietu -------------------------------------------------------
-mkdir -p "$KATALOG_BUILD/DEBIAN"
-mkdir -p "$KATALOG_BUILD/usr/bin"
-mkdir -p "$KATALOG_BUILD/usr/share/$NAZWA_PAKIETU"
-mkdir -p "$KATALOG_BUILD/usr/share/applications"
+# --- Package layout -----------------------------------------------------------
+mkdir -p "$BUILD_DIR/DEBIAN"
+mkdir -p "$BUILD_DIR/usr/bin"
+mkdir -p "$BUILD_DIR/usr/share/$PACKAGE_NAME"
+mkdir -p "$BUILD_DIR/usr/share/applications"
 
-# Aplikacja + tłumaczenia (patrz CLAUDE.md - lang/ MUSI jechać ze skryptem,
-# _KATALOG_LANG w kodzie liczy się względem lokalizacji ollama_manager.py)
-cp ollama_manager.py "$KATALOG_BUILD/usr/share/$NAZWA_PAKIETU/"
-cp -r lang "$KATALOG_BUILD/usr/share/$NAZWA_PAKIETU/"
+# App + translations (see CLAUDE.md - lang/ MUST travel with the script,
+# _KATALOG_LANG in the code is resolved relative to ollama_manager.py's location)
+cp ollama_manager.py "$BUILD_DIR/usr/share/$PACKAGE_NAME/"
+cp -r lang "$BUILD_DIR/usr/share/$PACKAGE_NAME/"
 
-# WHY: mały wrapper zamiast wołania pełnej ścieżki wprost z .desktop - dzięki
-#      temu `ollama-manager` da się też odpalić ręcznie z terminala.
-cat > "$KATALOG_BUILD/usr/bin/$NAZWA_PAKIETU" <<EOF
+# WHY: a small wrapper instead of calling the full path straight from
+#      .desktop - this also lets `ollama-manager` be run from a terminal.
+cat > "$BUILD_DIR/usr/bin/$PACKAGE_NAME" <<EOF
 #!/bin/sh
-exec python3 /usr/share/$NAZWA_PAKIETU/ollama_manager.py "\$@"
+exec python3 /usr/share/$PACKAGE_NAME/ollama_manager.py "\$@"
 EOF
-chmod 755 "$KATALOG_BUILD/usr/bin/$NAZWA_PAKIETU"
+chmod 755 "$BUILD_DIR/usr/bin/$PACKAGE_NAME"
 
-# Wpis w menu aplikacji - ta sama kategoria/ikona co install.sh
-cat > "$KATALOG_BUILD/usr/share/applications/$NAZWA_PAKIETU.desktop" <<EOF
+# Menu entry - same category/icon as install.sh. Comment[pl]: the .desktop
+# format supports per-language variants directly (see install.sh).
+cat > "$BUILD_DIR/usr/share/applications/$PACKAGE_NAME.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Ollama Manager
-Comment=Zarządzanie usługą i modelami Ollama
-Exec=$NAZWA_PAKIETU
+Comment=Manage the Ollama service and models
+Comment[pl]=Zarządzanie usługą i modelami Ollama
+Exec=$PACKAGE_NAME
 Icon=applications-system
 Categories=Utility;
 Terminal=false
 StartupNotify=true
 EOF
 
-# --- Metadane pakietu ---------------------------------------------------------
-# WHY: python3-pyqt6/python3-requests jako Depends (apt), nie pip - to one
-#      pakiety dostarczają zależności na Debianie/Ubuntu (2026). 'pkexec' jako
-#      osobny pakiet, NIE 'policykit-1' - polkit rozdzielono na polkitd/pkexec,
-#      'policykit-1' zostało tylko przejściowym metapakietem.
-cat > "$KATALOG_BUILD/DEBIAN/control" <<EOF
-Package: $NAZWA_PAKIETU
-Version: $WERSJA
+# --- Package metadata -----------------------------------------------------------
+# WHY: python3-pyqt6/python3-requests as Depends (apt), not pip - these are
+#      the packages that provide the dependencies on Debian/Ubuntu (2026).
+#      'pkexec' as its own package, NOT 'policykit-1' - polkit was split into
+#      polkitd/pkexec, 'policykit-1' is now just a transitional metapackage.
+cat > "$BUILD_DIR/DEBIAN/control" <<EOF
+Package: $PACKAGE_NAME
+Version: $VERSION
 Section: utils
 Priority: optional
 Architecture: all
@@ -99,28 +101,29 @@ Description: Ollama service and model manager for KDE (PyQt6)
  install it with one click) plus systemd and polkit.
 EOF
 
-# WHY: odśwież bazę menu po (od)instalowaniu - to samo, co install.sh robi
-#      ręcznie po skopiowaniu .desktop, tu jako skrypty pakietu (apt je
-#      uruchamia automatycznie po instalacji/usunięciu).
-cat > "$KATALOG_BUILD/DEBIAN/postinst" <<'EOF'
+# WHY: refresh the menu database after install/removal - the same thing
+#      install.sh does by hand after copying .desktop, here as package
+#      maintainer scripts (apt runs them automatically after install/removal).
+cat > "$BUILD_DIR/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -e
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database /usr/share/applications 2>/dev/null || true
 EOF
-chmod 755 "$KATALOG_BUILD/DEBIAN/postinst"
+chmod 755 "$BUILD_DIR/DEBIAN/postinst"
 
-cat > "$KATALOG_BUILD/DEBIAN/postrm" <<'EOF'
+cat > "$BUILD_DIR/DEBIAN/postrm" <<'EOF'
 #!/bin/sh
 set -e
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database /usr/share/applications 2>/dev/null || true
 EOF
-chmod 755 "$KATALOG_BUILD/DEBIAN/postrm"
+chmod 755 "$BUILD_DIR/DEBIAN/postrm"
 
-# --- Budowa -------------------------------------------------------------------
-# WHY: --root-owner-group zapisuje w .deb właściciela root:root bez potrzeby
-#      budowania tego skryptu przez sudo (dpkg >= 1.19.0, dawno w Debianie/Ubuntu).
-PLIK_DEB="${NAZWA_PAKIETU}_${WERSJA}_all.deb"
-dpkg-deb --build --root-owner-group "$KATALOG_BUILD" "$PLIK_DEB"
+# --- Build ---------------------------------------------------------------------
+# WHY: --root-owner-group records root:root ownership in the .deb without
+#      needing to run this script under sudo (dpkg >= 1.19.0, long present
+#      on Debian/Ubuntu).
+DEB_FILE="${PACKAGE_NAME}_${VERSION}_all.deb"
+dpkg-deb --build --root-owner-group "$BUILD_DIR" "$DEB_FILE"
 
-echo "Gotowe: $PLIK_DEB"
-echo "Instalacja: sudo apt install ./$PLIK_DEB"
+echo "Done: $DEB_FILE"
+echo "Install with: sudo apt install ./$DEB_FILE"
