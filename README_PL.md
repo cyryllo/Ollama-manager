@@ -1,7 +1,11 @@
 # Ollama Manager
 
-Prosta aplikacja desktopowa (PyQt6) do zarządzania lokalną instancją [Ollamy](https://ollama.com)
-pod KDE — bez terminala, bez Dockera. Wszystko działa lokalnie, w Twoim LAN.
+Aplikacja desktopowa (PyQt6) pod KDE, która zaczynała jako prosty manager usługi
+[Ollamy](https://ollama.com), a wyrosła w panel sterowania całym lokalnym stackiem AI:
+zarządzanie modelami na wielu hostach naraz, agregator modeli (LiteLLM) wystawiający
+jeden endpoint zgodny z API OpenAI dla narzędzi typu Continue/VS Code, oraz panel czatu
+w przeglądarce (Open WebUI). Bez terminala, bez Dockera, bez chmury — wszystko działa
+lokalnie, w Twoim LAN.
 
 ## Wymagania
 
@@ -12,6 +16,14 @@ pod KDE — bez terminala, bez Dockera. Wszystko działa lokalnie, w Twoim LAN.
 - Opcjonalnie: `ffmpeg`, `pandoc`, `zstd` (pełna funkcjonalność Open WebUI — głos, dokumenty w RAG)
 
 ## Instalacja i uruchomienie
+
+Najpierw sklonuj repozytorium i wejdź do jego katalogu — poniższe skrypty
+instalacyjne trzeba uruchamiać stamtąd (szukają `ollama_manager.py` obok siebie):
+
+```
+git clone https://github.com/cyryllo/Ollama-manager.git
+cd Ollama-manager
+```
 
 **Jako aplikacja z menu, bez roota (zalecane)** — instaluje zależności przez pip,
 kopiuje apkę do `~/.local/share/ollama-manager` i dodaje wpis w menu (sekcja
