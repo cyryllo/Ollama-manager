@@ -138,5 +138,8 @@
   "(domyślne)": "(predeterminado)",
   "Błąd pobierania: {blad}": "Error de descarga: {blad}",
   "{opis}: błąd - {blad}": "{opis}: error - {blad}",
-  "Adres dla klientów (np. Continue): {adres}": "Dirección para los clientes (ej. Continue): {adres}"
+  "Adres dla klientów (np. Continue): {adres}": "Dirección para los clientes (ej. Continue): {adres}",
+  "Domyślnie Ollama nasłuchuje tylko lokalnie (127.0.0.1) - inne urządzenia w sieci nie mogą się połączyć. Zaznacz, żeby nasłuchiwała na wszystkich interfejsach (0.0.0.0) i była dostępna spoza tego komputera (np. z innego PC albo dla BC-250 pracującego jako klient).": "Por defecto, Ollama solo escucha localmente (127.0.0.1) - otros dispositivos de la red no pueden conectarse. Marca esta opción para que escuche en todas las interfaces (0.0.0.0) y sea accesible desde fuera de este equipo (por ejemplo, desde otro PC o para una BC-250 que actúe como cliente).",
+  "Zezwól na dostęp spoza komputera (0.0.0.0)": "Permitir acceso desde fuera de este equipo (0.0.0.0)",
+  "domyślne (tylko lokalnie, 127.0.0.1)": "predeterminado (solo local, 127.0.0.1)"
 }

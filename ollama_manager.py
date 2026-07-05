@@ -40,7 +40,7 @@ from PyQt6.QtWidgets import (
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.4.1"
+WERSJA = "0.4.2"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -1407,6 +1407,17 @@ class MainWindow(QMainWindow):
         )
         uk.addLayout(uklad)
 
+        uklad, self.chk_host, self.btn_host, self.lbl_host_aktualny = self._wiersz_ollama_env_checkbox(
+            "OLLAMA_HOST",
+            _("Domyślnie Ollama nasłuchuje tylko lokalnie (127.0.0.1) - inne urządzenia "
+              "w sieci nie mogą się połączyć. Zaznacz, żeby nasłuchiwała na wszystkich "
+              "interfejsach (0.0.0.0) i była dostępna spoza tego komputera (np. z innego "
+              "PC albo dla BC-250 pracującego jako klient)."),
+            _("Zezwól na dostęp spoza komputera (0.0.0.0)"),
+            self.ustaw_host,
+        )
+        uk.addLayout(uklad)
+
         layout.addWidget(karta)
         layout.addStretch(1)
 
@@ -1521,6 +1532,7 @@ class MainWindow(QMainWindow):
             self.combo_kv_cache, self.btn_kv_cache,
             self.chk_vulkan, self.btn_vulkan,
             self.chk_igpu, self.btn_igpu,
+            self.chk_host, self.btn_host,
         ):
             widget.setEnabled(stan["zainstalowana"])
 
@@ -1553,6 +1565,12 @@ class MainWindow(QMainWindow):
         self.chk_igpu.setChecked(env.get("OLLAMA_IGPU_ENABLE") != "false")
         self.lbl_igpu_aktualny.setText(
             _AKTUALNIE.format(wartosc=env.get("OLLAMA_IGPU_ENABLE") or _("domyślne (włączone)"))
+        )
+        # WHY: domyślnie WYŁĄCZONE (dostęp tylko lokalny) - tak jak Vulkan, więc
+        #      checkbox jest zaznaczony tylko, gdy zmienna faktycznie ustawiona.
+        self.chk_host.setChecked(bool(env.get("OLLAMA_HOST")))
+        self.lbl_host_aktualny.setText(
+            _AKTUALNIE.format(wartosc=env.get("OLLAMA_HOST") or _("domyślne (tylko lokalnie, 127.0.0.1)"))
         )
 
     def _po_odswiezeniu(self, stan):
@@ -1817,6 +1835,13 @@ class MainWindow(QMainWindow):
         #      usuwa zmienną (powrót do domyślnego "włączone"), a odznaczenie
         #      zapisuje jawne "false", żeby wymusić wyłączenie iGPU.
         self._ustaw_zmienna_ollama("OLLAMA_IGPU_ENABLE", "" if self.chk_igpu.isChecked() else "false")
+
+    def ustaw_host(self):
+        # WHY: to zwykły przełącznik "wyłączone/włączone", jak Vulkan - zaznaczenie
+        #      zapisuje jawny adres nasłuchu na wszystkich interfejsach (port 11434,
+        #      ten sam co domyślny), odznaczenie USUWA zmienną (powrót do wbudowanego
+        #      domyślnego "127.0.0.1:11434" - tylko lokalnie).
+        self._ustaw_zmienna_ollama("OLLAMA_HOST", "0.0.0.0:11434" if self.chk_host.isChecked() else "")
 
     def przelacz_webui_autostart(self, wlacz):
         # WHAT: reakcja na kliknięcie checkboxa autostartu WebUI.
