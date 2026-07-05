@@ -40,7 +40,7 @@ from PyQt6.QtWidgets import (
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.4.2"
+WERSJA = "0.4.3"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -567,6 +567,38 @@ def litellm_zapisz_config(serwery):
     sciezka = _litellm_config_sciezka()
     sciezka.parent.mkdir(parents=True, exist_ok=True)
     sciezka.write_text(_zbuduj_config_litellm(serwery))
+
+
+def _zbuduj_config_continue(modele):
+    # WHAT: generuje treść config.yaml dla Continue.dev (VS Code) - jeden wpis
+    #       w 'models' na każdy UNIKALNY model wykryty w agregatorze LiteLLM.
+    # WHY:  Continue rozmawia tylko z LiteLLM (jeden endpoint zgodny z OpenAI),
+    #       więc nie musi wiedzieć, na jakim hoście faktycznie liczy się model -
+    #       liczy się tylko jego nazwa, identyczna z tą, którą LiteLLM wystawia
+    #       pod /v1/models (stąd 'modele' to lista nazw, nie krotki host+model
+    #       jak w _zbuduj_config_litellm). ŻADNYCH kotwic YAML (&anchor /
+    #       <<: *anchor), każdy model rozpisany osobno - Continue parsuje YAML
+    #       1.2, gdzie merge keys bez jawnego nagłówka "%YAML 1.1" po cichu się
+    #       nie stosują i model znika z selektora klienta (potwierdzone w
+    #       praktyce - patrz pamięć/notatki z testów BC-250 + Continue).
+    if not modele:
+        return "models: []\n"
+
+    def _yaml_str(tekst):
+        return '"' + tekst.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    linie = ["name: Local LiteLLM", "version: 1.0.0", "schema: v1", "", "models:"]
+    for model in modele:
+        linie.append(f"  - name: {_yaml_str(model)}")
+        linie.append("    provider: openai")
+        linie.append(f"    model: {_yaml_str(model)}")
+        linie.append(f"    apiBase: {LITELLM_URL}/v1")
+        linie.append("    apiKey: sk-anything")
+        linie.append("    roles:")
+        linie.append("      - chat")
+        linie.append("      - edit")
+        linie.append("      - apply")
+    return "\n".join(linie) + "\n"
     return sciezka
 
 
@@ -894,6 +926,52 @@ class DialogZarzadzajSerwerami(QDialog):
             return
         del self.serwery[wiersz]
         self._odswiez_liste()
+
+
+class DialogConfigContinue(QDialog):
+    """Podgląd gotowego config.yaml dla Continue.dev - tylko do skopiowania.
+
+    WHY: appka celowo NIGDY nie zapisuje ~/.continue/config.yaml sama - ten
+    plik należy do użytkownika i może mieć inne, niezwiązane z Ollamą wpisy;
+    automatyczny zapis mógłby je nadpisać. Zamiast tego pokazujemy gotową,
+    poprawną treść (patrz _zbuduj_config_continue) do ręcznego wklejenia/scalenia.
+    """
+
+    def __init__(self, tresc, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(_("Config dla Continue.dev"))
+        self.setMinimumSize(560, 420)
+
+        layout = QVBoxLayout(self)
+        lbl_opis = QLabel(
+            _("Wklej poniższą treść do pliku ~/.continue/config.yaml (nadpisując "
+              "go całkowicie, albo scalając ręcznie z istniejącą zawartością, "
+              "jeśli masz tam już inne modele). Appka niczego tu nie zapisuje "
+              "automatycznie.")
+        )
+        lbl_opis.setWordWrap(True)
+        layout.addWidget(lbl_opis)
+
+        self.pole_tresc = QPlainTextEdit()
+        self.pole_tresc.setPlainText(tresc)
+        self.pole_tresc.setReadOnly(True)
+        czcionka = self.pole_tresc.font()
+        czcionka.setFamily("monospace")  # WHY: YAML czyta się lepiej ze stałą szerokością znaków
+        self.pole_tresc.setFont(czcionka)
+        layout.addWidget(self.pole_tresc, 1)
+
+        pasek = QHBoxLayout()
+        pasek.addStretch(1)
+        btn_kopiuj = QPushButton(_("Kopiuj do schowka"))
+        btn_kopiuj.clicked.connect(self._kopiuj)
+        pasek.addWidget(btn_kopiuj)
+        btn_zamknij = QPushButton(_("Zamknij"))
+        btn_zamknij.clicked.connect(self.accept)
+        pasek.addWidget(btn_zamknij)
+        layout.addLayout(pasek)
+
+    def _kopiuj(self):
+        QApplication.clipboard().setText(self.pole_tresc.toPlainText())
 
 
 # =============================================================================
@@ -1304,6 +1382,9 @@ class MainWindow(QMainWindow):
         self.btn_odswiez_agregator = QPushButton(_("Odśwież listę"))
         self.btn_odswiez_agregator.clicked.connect(self.odswiez_liste_agregatora)
         pasek_agregator.addWidget(self.btn_odswiez_agregator)
+        self.btn_config_continue = QPushButton(_("Config dla Continue..."))
+        self.btn_config_continue.clicked.connect(self.generuj_config_continue)
+        pasek_agregator.addWidget(self.btn_config_continue)
         uk_agregator.addLayout(pasek_agregator)
         self.lista_agregator = QListWidget()
         uk_agregator.addWidget(self.lista_agregator)
@@ -1928,6 +2009,36 @@ class MainWindow(QMainWindow):
                 return
             for nazwa_hosta, model, adres in wpisy:
                 self.lista_agregator.addItem(f"{model}  —  {nazwa_hosta} ({adres})")
+
+        worker.wynik.connect(_po_sprawdzeniu)
+        worker.start()
+
+    def generuj_config_continue(self):
+        # WHAT: odpytuje hosty (jak odswiez_liste_agregatora) i z wykrytych
+        #       modeli buduje gotowy config.yaml dla Continue.dev, pokazany
+        #       do skopiowania w DialogConfigContinue.
+        # WHY:  osobne, świadome kliknięcie zamiast automatycznego zapisu przy
+        #       starcie LiteLLM - appka nie ma dotykać ~/.continue/config.yaml
+        #       (patrz DialogConfigContinue). Model może wystąpić na kilku
+        #       hostach naraz (LiteLLM sam routuje) - Continue widzi tylko
+        #       nazwę modelu, więc listę deduplikujemy.
+        if self._agregator_worker and self._agregator_worker.isRunning():
+            return
+        self.btn_config_continue.setEnabled(False)
+        worker = AgregatorWorker(self.serwery)
+        self._agregator_worker = worker
+
+        def _po_sprawdzeniu(wpisy, w=worker):
+            self.btn_config_continue.setEnabled(True)
+            modele = sorted({model for _nazwa_hosta, model, _adres in wpisy})
+            if not modele:
+                QMessageBox.information(
+                    self, _("Brak modeli"),
+                    _("Brak dostępnych modeli (hosty nieosiągalne albo puste) - "
+                      "sprawdź listę serwerów u góry okna i spróbuj ponownie."),
+                )
+                return
+            DialogConfigContinue(_zbuduj_config_continue(modele), self).exec()
 
         worker.wynik.connect(_po_sprawdzeniu)
         worker.start()
