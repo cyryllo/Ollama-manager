@@ -40,7 +40,7 @@ from PyQt6.QtWidgets import (
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.4.0"
+WERSJA = "0.4.1"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -306,6 +306,39 @@ def _uv_binarka():
     return str(kandydat) if kandydat.exists() else None
 
 
+def _uv_zapewnij():
+    # WHAT: zwraca ścieżkę do 'uv', instalując je w razie potrzeby przez oficjalny
+    #       standalone installer Astral (curl | sh), NIE przez 'pip install --user'.
+    # WHY:  Debian trixie (i każdy Python 3.11+ zgodny z PEP 668) oznacza systemowego
+    #       python3 jako "externally-managed" - 'pip install --user uv' na sys.executable
+    #       wywala się błędem "externally-managed-environment", zanim w ogóle dojdzie
+    #       do instalacji uv/LiteLLM/WebUI. Installer Astral pobiera gotową binarkę
+    #       uv wprost do ~/.local/bin i w ogóle nie dotyka pip ani systemowego
+    #       Pythona, więc PEP 668 nie ma tu zastosowania - ten sam wzorzec (curl | sh),
+    #       co już używany do instalacji samej Ollamy (patrz ollama_zainstaluj()).
+    #       Wspólny helper zamiast duplikowania bootstrapu w webui_zainstaluj()
+    #       i litellm_zainstaluj().
+    uv = _uv_binarka()
+    if uv:
+        return uv
+
+    wynik = subprocess.run(
+        ["sh", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"],
+        capture_output=True, text=True, timeout=None,
+    )
+    if wynik.returncode != 0:
+        raise RuntimeError(wynik.stderr.strip() or _("instalacja uv: nieznany błąd"))
+
+    # WHY: installer dopisuje ~/.local/bin do PATH w plikach powłoki (.bashrc itp.),
+    #      ale ten proces (odpalony ze skrótu .desktop) już wystartował ze starym
+    #      PATH i tego nie przeczyta - stąd _uv_binarka() sprawdza katalog wprost,
+    #      niezależnie od PATH.
+    uv = _uv_binarka()
+    if not uv:
+        raise RuntimeError(_("Zainstalowano 'uv', ale nie widać go w ~/.local/bin."))
+    return uv
+
+
 def webui_zainstaluj():
     # WHAT: instaluje Open WebUI przez 'uv tool install', z Pythonem przypiętym na 3.11.
     # WHY:  Open WebUI (stan na 2026) NIE wspiera jeszcze Pythona 3.13, a to on jest
@@ -314,17 +347,7 @@ def webui_zainstaluj():
     #       'uv' sam dociąga i zarządza kompatybilnym Pythonem 3.11 (bez apt/roota/
     #       Dockera) i instaluje open-webui w odizolowanym środowisku, wystawiając
     #       binarkę w ~/.local/bin - dokładnie tam, gdzie szuka jej webui_binarka().
-    uv = _uv_binarka()
-    if not uv:
-        wynik = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--user", "uv"],
-            capture_output=True, text=True, timeout=None,
-        )
-        if wynik.returncode != 0:
-            raise RuntimeError(wynik.stderr.strip() or _("instalacja uv: nieznany błąd"))
-        uv = _uv_binarka()
-        if not uv:
-            raise RuntimeError(_("Zainstalowano 'uv', ale nie widać go w ~/.local/bin."))
+    uv = _uv_zapewnij()
 
     wynik = subprocess.run(
         [uv, "tool", "install", "--python", "3.11", "open-webui"],
@@ -477,17 +500,7 @@ def litellm_zainstaluj():
     # WHY:  ten sam wzorzec co Open WebUI (bez Dockera/roota), ale prościej -
     #       LiteLLM (stan na 2026) wspiera Pythona 3.10-3.13, więc w
     #       przeciwieństwie do Open WebUI nie trzeba pinować konkretnej wersji.
-    uv = _uv_binarka()
-    if not uv:
-        wynik = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--user", "uv"],
-            capture_output=True, text=True, timeout=None,
-        )
-        if wynik.returncode != 0:
-            raise RuntimeError(wynik.stderr.strip() or _("instalacja uv: nieznany błąd"))
-        uv = _uv_binarka()
-        if not uv:
-            raise RuntimeError(_("Zainstalowano 'uv', ale nie widać go w ~/.local/bin."))
+    uv = _uv_zapewnij()
 
     wynik = subprocess.run(
         [uv, "tool", "install", "litellm[proxy]"],

@@ -99,7 +99,46 @@ fi
 echo "Installing Ollama Manager $NEW_VERSION..."
 
 # 1) Python dependencies - no root (--user)
-python3 -m pip install --user --upgrade PyQt6 requests
+install_python_deps() {
+    # WHAT: skip pip entirely if PyQt6/requests are already importable (e.g. installed
+    #       earlier via apt as python3-pyqt6/python3-requests) - nothing to do.
+    if python3 -c "import PyQt6, requests" >/dev/null 2>&1; then
+        echo "PyQt6 and requests are already available for python3 - skipping pip install."
+        return
+    fi
+
+    if ! python3 -m pip --version >/dev/null 2>&1; then
+        echo "pip is not available for python3." >&2
+        echo "Install it first: sudo apt install python3-pip" >&2
+        exit 1
+    fi
+
+    echo "Installing PyQt6 and requests for the current user..."
+    local pip_output
+    if pip_output="$(python3 -m pip install --user --upgrade PyQt6 requests 2>&1)"; then
+        return
+    fi
+
+    # WHY: recent Debian (trixie/sid) marks the system python3 "externally-managed"
+    #      (PEP 668), so a plain `pip install --user` aborts before installing anything.
+    #      --break-system-packages is pip's own documented escape hatch for exactly
+    #      this case; since we still only install with --user, nothing outside
+    #      ~/.local is touched and no apt-managed package is overwritten.
+    if printf '%s\n' "$pip_output" | grep -q "externally-managed-environment"; then
+        echo "System Python is externally managed (PEP 668) - retrying with --break-system-packages (user-level install only)..."
+        python3 -m pip install --user --upgrade --break-system-packages PyQt6 requests
+    else
+        printf '%s\n' "$pip_output" >&2
+        exit 1
+    fi
+}
+
+command -v python3 >/dev/null 2>&1 || {
+    echo "python3 not found. Install it first: sudo apt install python3" >&2
+    exit 1
+}
+
+install_python_deps
 
 # 2) Copy the script to a stable location (survives removing/moving the cloned repo)
 mkdir -p "$TARGET_DIR"
