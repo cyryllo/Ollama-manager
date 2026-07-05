@@ -40,7 +40,7 @@ from PyQt6.QtWidgets import (
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.4.3"
+WERSJA = "0.4.4"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -951,6 +951,24 @@ class DialogConfigContinue(QDialog):
         )
         lbl_opis.setWordWrap(True)
         layout.addWidget(lbl_opis)
+
+        # WHY: każdy model dostaje tu domyślnie role chat/edit/apply - dobre dla
+        #      modeli czatowych/kodujących (np. qwen2.5-coder), ale niepoprawne
+        #      dla innych ról z listy docelowych modeli projektu (patrz
+        #      CLAUDE.md) - model embeddingowy jak nomic-embed-text (używany w
+        #      RAG WebUI) potrzebuje ZAMIAST tego "roles: [embed]". Dopisujemy
+        #      to wprost w opisie, żeby nie trzeba było szukać w dokumentacji
+        #      Continue, jeśli taki model trafi na listę.
+        lbl_role = QLabel(
+            _("Każdy model dostaje domyślnie role: chat, edit, apply. Dostępne są "
+              "też inne role do ręcznej zmiany w treści poniżej: autocomplete "
+              "(podpowiedzi w edytorze), embed (modele embeddingowe, np. "
+              "nomic-embed-text - używane w RAG), rerank (przeszukiwanie/ranking "
+              "wyników). Model, który nie służy do czatu/edycji kodu, powinien "
+              "mieć podmienione roles na odpowiednią z tej listy.")
+        )
+        lbl_role.setWordWrap(True)
+        layout.addWidget(lbl_role)
 
         self.pole_tresc = QPlainTextEdit()
         self.pole_tresc.setPlainText(tresc)
