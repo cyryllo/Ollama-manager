@@ -7,6 +7,8 @@ jeden endpoint zgodny z API OpenAI dla narzędzi typu Continue/VS Code, oraz pan
 w przeglądarce (Open WebUI). Bez terminala, bez Dockera, bez chmury — wszystko działa
 lokalnie, w Twoim LAN.
 
+![Ollama Manager — zakładka Usługi](om.png)
+
 ## Wymagania
 
 - Python 3 + **PyQt6**, **requests**

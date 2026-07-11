@@ -8,6 +8,8 @@ everything runs on your LAN.
 
 *(Polska wersja tego pliku: [README_PL.md](README_PL.md))*
 
+![Ollama Manager — Services tab](om.png)
+
 ## Requirements
 
 - Python 3 + **PyQt6**, **requests**
