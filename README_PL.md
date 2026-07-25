@@ -68,9 +68,11 @@ python3 ollama_manager.py
 **Modele**
 - Tabela zainstalowanych modeli — nazwa, rozmiar na dysku i kolumna z szacowanym/realnym
   VRAM dla każdego — + usuwanie
-- Pobieranie nowych modeli z podpowiedziami popularnych — czatowe/kodujące (Llama, Gemma,
-  Mistral, Phi, DeepSeek, Qwen, GPT-OSS, Ornith...), embeddingowe (Nomic, Mixedbread, BGE-M3,
-  EmbeddingGemma) i wizyjne (Qwen2.5-VL, Llama 3.2 Vision, Moondream) — z paskiem postępu
+- Pobieranie nowych modeli z podpowiedziami popularnych, pogrupowanymi wg zastosowania wprost
+  w rozwijanej liście — ogólne/czat (Llama, Gemma, Mistral, Phi, Qwen3), kod (Qwen-Coder,
+  DeepSeek-Coder-V2, Ornith), rozumowanie/agentowe (DeepSeek-R1, GPT-OSS), embeddingi do RAG
+  (Nomic, Mixedbread, BGE-M3, EmbeddingGemma) i wizyjne (Qwen2.5-VL, Llama 3.2 Vision, Moondream)
+  — z paskiem postępu
 - Wybór rozmiaru i kwantyzacji (domyślna/Q8_0/pełna F16) przy pobieraniu — obie listy są
   dopasowane do wybranego modelu (a kwantyzacja dodatkowo do rozmiaru), zweryfikowane na
   ollama.com/library; dla modeli wymagających dodatkowego segmentu w tagu przy niedomyślnej

@@ -68,9 +68,11 @@ python3 ollama_manager.py
 
 **Models**
 - Table of installed models — name, disk size, and an estimated/live VRAM column each — + deletion
-- Downloading new models with suggestions of popular ones — chat/coding (Llama, Gemma, Mistral,
-  Phi, DeepSeek, Qwen, GPT-OSS, Ornith...), embedding (Nomic, Mixedbread, BGE-M3, EmbeddingGemma),
-  and vision (Qwen2.5-VL, Llama 3.2 Vision, Moondream) — with a progress bar
+- Downloading new models with suggestions of popular ones, grouped by what they're for right in
+  the dropdown — general/chat (Llama, Gemma, Mistral, Phi, Qwen3), code (Qwen-Coder,
+  DeepSeek-Coder-V2, Ornith), reasoning/agentic (DeepSeek-R1, GPT-OSS), embeddings for RAG (Nomic,
+  Mixedbread, BGE-M3, EmbeddingGemma), and vision (Qwen2.5-VL, Llama 3.2 Vision, Moondream) — with
+  a progress bar
 - Size and quantization picker (default/Q8_0/full F16) when pulling — both lists are specific to
   the selected model (and size, for quantization), verified against ollama.com/library; for models
   that need an extra tag segment for non-default quantization (e.g. "instruct"/"it"), the app adds

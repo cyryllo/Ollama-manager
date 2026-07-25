@@ -29,7 +29,7 @@ from pathlib import Path
 import requests  # WHY: czytelniejsze od urllib przy strumieniowaniu /api/pull
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QUrl, QSettings
-from PyQt6.QtGui import QIcon, QDesktopServices
+from PyQt6.QtGui import QIcon, QDesktopServices, QStandardItemModel, QStandardItem
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QPushButton, QListWidget, QProgressBar, QTabWidget,
@@ -42,7 +42,7 @@ from PyQt6.QtWidgets import (
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.4.18"
+WERSJA = "0.4.19"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -63,33 +63,51 @@ WEBUI_URL = "http://localhost:8080"
 LITELLM_URL = "http://localhost:4000"
 
 # WHAT: modele (SAME nazwy rodzin, bez rozmiaru) podpowiadane w rozwijanej
-#       liście pobierania - rozmiar wybiera się osobno, w polu "Rozmiar"
-#       obok, którego podpowiedzi zależą od wybranego modelu (patrz
-#       ROZMIARY_WG_MODELU i _aktualizuj_liste_rozmiarow).
-# WHY:  przekrój popularnych rodzin (Llama, Gemma, Mistral, Phi, DeepSeek, Qwen) -
-#       użytkownik wybiera z listy, zamiast wpisywać nazwy z palca. Pole jest
-#       edytowalne, więc dowolny inny model z ollama.com/library da się wpisać ręcznie.
-POLECANE_MODELE = [
-    "llama3.2",          # Meta - lekki, uniwersalny (domyślnie 3B)
-    "llama3.1",          # Meta - solidny model ogólnego przeznaczenia
-    "gemma3",            # Google - domyślnie 4B, mieści się na jednym GPU
-    "gemma2",            # Google - poprzednia generacja
-    "mistral",           # Mistral AI - klasyczny 7B
-    "phi4",              # Microsoft - 14B, mocny w rozumowaniu
-    "deepseek-r1",       # DeepSeek - model z "myśleniem" (reasoning)
-    "qwen3",             # Qwen - ogólny model najnowszej generacji
-    "qwen2.5-coder",     # Qwen - do kodu, wspiera tool-calling
-    "nomic-embed-text",  # embeddingi (RAG, wyszukiwanie semantyczne)
-    "gpt-oss",            # OpenAI - open-weight, reasoning/agentowy
-    "deepseek-coder-v2",  # DeepSeek - MoE do kodu, tool-calling
-    "ornith",              # agent kodujący, MIT, kontekst 256K
-    "mxbai-embed-large",  # embeddingi - SOTA jakość dla tej klasy rozmiaru
-    "bge-m3",              # embeddingi - wielojęzyczne, długie dokumenty (do 8192 tokenów)
-    "embeddinggemma",      # embeddingi - najnowsze od Google (na bazie Gemma 3), bardzo lekkie
-    "qwen2.5vl",           # wizyjny (obrazy/OCR/dokumenty) - Qwen
-    "llama3.2-vision",     # wizyjny - Meta
-    "moondream",           # wizyjny - bardzo lekki (<4GB VRAM)
+#       liście pobierania - pogrupowane wg zastosowania. Rozmiar wybiera się
+#       osobno, w polu "Rozmiar" obok, którego podpowiedzi zależą od wybranego
+#       modelu (patrz ROZMIARY_WG_MODELU i _aktualizuj_liste_rozmiarow). Pełne
+#       wyjaśnienie każdej kategorii jest w zakładce "Pomoc" (patrz
+#       _zakladka_pomoc) - tu w rozwijanej liście widać tylko nazwy kategorii
+#       jako nieklikalne nagłówki (patrz _wypelnij_combo_modele).
+# WHY:  użytkownik wybiera z listy, zamiast wpisywać nazwy z palca, a grupowanie
+#       od razu pokazuje, do czego dany model służy (np. że embeddingi to NIE
+#       modele do rozmowy). Pole jest edytowalne, więc dowolny inny model z
+#       ollama.com/library da się mimo to wpisać ręcznie.
+POLECANE_MODELE_WG_KATEGORII = [
+    ("Ogólne / czat", [
+        "llama3.2",     # Meta - lekki, uniwersalny (domyślnie 3B)
+        "llama3.1",     # Meta - solidny model ogólnego przeznaczenia
+        "gemma3",       # Google - domyślnie 4B, mieści się na jednym GPU
+        "gemma2",       # Google - poprzednia generacja
+        "mistral",      # Mistral AI - klasyczny 7B
+        "phi4",         # Microsoft - 14B, mocny w rozumowaniu
+        "qwen3",        # Qwen - ogólny model najnowszej generacji
+    ]),
+    ("Kod / programowanie", [
+        "qwen2.5-coder",      # Qwen - do kodu, wspiera tool-calling
+        "deepseek-coder-v2",  # DeepSeek - MoE do kodu, tool-calling
+        "ornith",              # agent kodujący, MIT, kontekst 256K
+    ]),
+    ("Rozumowanie / agentowe", [
+        "deepseek-r1",  # DeepSeek - model z "myśleniem" (reasoning)
+        "gpt-oss",      # OpenAI - open-weight, reasoning/agentowy
+    ]),
+    ("Embeddingi (RAG)", [
+        "nomic-embed-text",   # embeddingi (RAG, wyszukiwanie semantyczne)
+        "mxbai-embed-large",  # embeddingi - SOTA jakość dla tej klasy rozmiaru
+        "bge-m3",              # embeddingi - wielojęzyczne, długie dokumenty (do 8192 tokenów)
+        "embeddinggemma",      # embeddingi - najnowsze od Google (na bazie Gemma 3), bardzo lekkie
+    ]),
+    ("Wizyjne (obrazy/dokumenty)", [
+        "qwen2.5vl",        # wizyjny (obrazy/OCR/dokumenty) - Qwen
+        "llama3.2-vision",  # wizyjny - Meta
+        "moondream",        # wizyjny - bardzo lekki (<4GB VRAM)
+    ]),
 ]
+
+# WHAT: płaska lista wszystkich modeli z POLECANE_MODELE_WG_KATEGORII - do
+#       miejsc, którym nie zależy na podziale (np. weryfikacja w testach).
+POLECANE_MODELE = [nazwa for _kategoria, modele in POLECANE_MODELE_WG_KATEGORII for nazwa in modele]
 
 # WHAT: RZECZYWISTE rozmiary dostępne dla każdego modelu z POLECANE_MODELE -
 #       zweryfikowane wprost na stronach tagów ollama.com/library/<model>/tags
@@ -1570,11 +1588,12 @@ class MainWindow(QMainWindow):
         pasek_pull = QHBoxLayout()
         self.combo_modele = QComboBox()
         self.combo_modele.setEditable(True)  # WHY: pozwól wpisać też dowolną nazwę
-        # WHY: domyślne maxVisibleItems (10) obcinało listę POLECANE_MODELE
-        #      (13 pozycji) i wymuszało przewijanie rozwiniętej listy - z
-        #      zapasem, żeby kolejne dopisane modele też mieściły się od razu.
-        self.combo_modele.setMaxVisibleItems(20)
-        self.combo_modele.addItems(POLECANE_MODELE)
+        # WHY: domyślne maxVisibleItems (10) obcinało listę i wymuszało
+        #      przewijanie rozwiniętej listy - z zapasem (5 kategorii + 19
+        #      modeli = 24 wiersze), żeby kolejne dopisane modele też mieściły
+        #      się od razu, bez przewijania.
+        self.combo_modele.setMaxVisibleItems(30)
+        self._wypelnij_combo_modele()
         # WHY: podpowiedzi na liście to tylko wybór - pełna baza jest na ollama.com,
         #      placeholder przypomina o tym, gdy pole jest puste.
         self.combo_modele.lineEdit().setPlaceholderText(
@@ -1933,6 +1952,37 @@ class MainWindow(QMainWindow):
             uk.addWidget(lbl_opis)
 
         layout.addWidget(karta)
+
+        # WHAT: wyjaśnienie kategorii, którymi pogrupowana jest rozwijana
+        #       lista modeli w karcie "Pobierz nowy model" (patrz
+        #       POLECANE_MODELE_WG_KATEGORII, _wypelnij_combo_modele) - sama
+        #       lista pokazuje tylko nazwy kategorii jako nagłówki, pełny
+        #       opis "do czego to jest" jest tutaj.
+        # WHY:  nazwa modelu (np. "bge-m3") sama z siebie nic nie mówi
+        #       użytkownikowi bez doświadczenia z Ollamą - kategorie w
+        #       rozwijanej liście dają szybką orientację, ale bez opisu nie
+        #       wiadomo, czym różni się np. "Rozumowanie" od zwykłego "Ogólne".
+        karta_kategorie = QGroupBox(_("Kategorie modeli do pobrania"))
+        uk_kategorie = QVBoxLayout(karta_kategorie)
+        kategorie = [
+            (_("Ogólne / czat"), _("Do rozmowy, pytań i codziennych zadań - bez wąskiej specjalizacji.")),
+            (_("Kod / programowanie"), _("Pisanie i edycja kodu, wspierają tool-calling pod Continue/OpenCode.")),
+            (_("Rozumowanie / agentowe"), _("Modele z jawnym \"myśleniem\" przed odpowiedzią (chain-of-thought) - "
+                                             "do złożonych, wieloetapowych zadań.")),
+            (_("Embeddingi (RAG)"), _("NIE do rozmowy - zamieniają tekst na wektory pod wyszukiwanie semantyczne "
+                                       "(np. RAG w Open WebUI).")),
+            (_("Wizyjne (obrazy/dokumenty)"), _("Rozumieją obrazy, zrzuty ekranu, skany, OCR - nie tylko tekst.")),
+        ]
+        for nazwa, opis in kategorie:
+            lbl_nazwa = QLabel(nazwa)
+            czcionka = lbl_nazwa.font()
+            czcionka.setBold(True)
+            lbl_nazwa.setFont(czcionka)
+            uk_kategorie.addWidget(lbl_nazwa)
+            lbl_opis = QLabel(opis)
+            lbl_opis.setWordWrap(True)
+            uk_kategorie.addWidget(lbl_opis)
+        layout.addWidget(karta_kategorie)
 
         # WHAT: krótkie wyjaśnienie, skąd biorą się ograniczenia w polach
         #       "Rozmiar" i "Kwantyzacja" na karcie "Pobierz nowy model".
@@ -2575,6 +2625,31 @@ class MainWindow(QMainWindow):
         self._uruchom_akcje(
             lambda: self.client.delete_model(model), _("Usunięcie {model}").format(model=model)
         )
+
+    def _wypelnij_combo_modele(self):
+        # WHAT: wypełnia combo_modele modelami z POLECANE_MODELE_WG_KATEGORII,
+        #       z nazwą kategorii jako nieklikalnym, wyszarzonym nagłówkiem nad
+        #       każdą grupą (Qt.ItemFlag.NoItemFlags - nie da się go wybrać ani
+        #       kursorem, ani strzałkami).
+        # WHY:  sama nazwa modelu (np. "bge-m3") nic nie mówi, do czego służy -
+        #       nagłówek grupy ("Embeddingi (RAG)") daje to za darmo, bez
+        #       osobnego okna/tooltipa. Pełne wyjaśnienie każdej kategorii jest
+        #       w zakładce "Pomoc" (patrz _zakladka_pomoc) - tu w liście
+        #       widać tylko nazwy, żeby lista została krótka i czytelna.
+        model = QStandardItemModel(self.combo_modele)
+        for kategoria, modele in POLECANE_MODELE_WG_KATEGORII:
+            # WHY: _(kategoria) - te same klucze co w _zakladka_pomoc niżej
+            #      (dosłownie te same polskie stringi), więc nagłówek jest
+            #      przetłumaczony bez osobnych, zduplikowanych wpisów w lang/*.json.
+            naglowek = QStandardItem(f"— {_(kategoria)} —")
+            naglowek.setFlags(Qt.ItemFlag.NoItemFlags)
+            czcionka = naglowek.font()
+            czcionka.setBold(True)
+            naglowek.setFont(czcionka)
+            model.appendRow(naglowek)
+            for nazwa in modele:
+                model.appendRow(QStandardItem(nazwa))
+        self.combo_modele.setModel(model)
 
     def _aktualizuj_liste_rozmiarow(self):
         # WHAT: podmienia podpowiedzi w polu "Rozmiar" na te NAPRAWDĘ dostępne
