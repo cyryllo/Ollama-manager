@@ -32,8 +32,8 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QUrl, QSettings
 from PyQt6.QtGui import QIcon, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLabel, QPushButton, QListWidget, QListWidgetItem, QProgressBar, QTabWidget,
-    QGroupBox,
+    QLabel, QPushButton, QListWidget, QProgressBar, QTabWidget,
+    QGroupBox, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QPlainTextEdit, QComboBox, QMessageBox, QCheckBox,
     QDialog, QLineEdit, QScrollArea,
 )
@@ -42,7 +42,7 @@ from PyQt6.QtWidgets import (
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.4.9"
+WERSJA = "0.4.10"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -62,33 +62,61 @@ WEBUI_URL = "http://localhost:8080"
 # WHY:  jw. - jedno miejsce do zmiany, gdyby port kolidował z czymś innym.
 LITELLM_URL = "http://localhost:4000"
 
-# WHAT: modele podpowiadane w rozwijanej liście pobierania.
+# WHAT: modele (SAME nazwy rodzin, bez rozmiaru) podpowiadane w rozwijanej
+#       liście pobierania - rozmiar wybiera się osobno, w polu "Rozmiar"
+#       obok, którego podpowiedzi zależą od wybranego modelu (patrz
+#       ROZMIARY_WG_MODELU i _aktualizuj_liste_rozmiarow).
 # WHY:  przekrój popularnych rodzin (Llama, Gemma, Mistral, Phi, DeepSeek, Qwen) -
 #       użytkownik wybiera z listy, zamiast wpisywać nazwy z palca. Pole jest
 #       edytowalne, więc dowolny inny model z ollama.com/library da się wpisać ręcznie.
 POLECANE_MODELE = [
     "llama3.2",          # Meta - lekki, uniwersalny (domyślnie 3B)
-    "llama3.1:8b",       # Meta - solidny model ogólnego przeznaczenia
+    "llama3.1",          # Meta - solidny model ogólnego przeznaczenia
     "gemma3",            # Google - domyślnie 4B, mieści się na jednym GPU
-    "gemma2:9b",         # Google - poprzednia generacja
+    "gemma2",            # Google - poprzednia generacja
     "mistral",           # Mistral AI - klasyczny 7B
     "phi4",              # Microsoft - 14B, mocny w rozumowaniu
-    "deepseek-r1:8b",    # DeepSeek - model z "myśleniem" (reasoning)
-    "qwen3:8b",          # Qwen - ogólny model najnowszej generacji
-    "qwen2.5-coder:7b",  # Qwen - do kodu, wspiera tool-calling
-    "qwen2.5-coder:14b",
-    "qwen2.5-coder:1.5b",
+    "deepseek-r1",       # DeepSeek - model z "myśleniem" (reasoning)
+    "qwen3",             # Qwen - ogólny model najnowszej generacji
+    "qwen2.5-coder",     # Qwen - do kodu, wspiera tool-calling
     "nomic-embed-text",  # embeddingi (RAG, wyszukiwanie semantyczne)
-    "gpt-oss:20b",            # OpenAI - open-weight, reasoning/agentowy, ~16GB RAM
-    "deepseek-coder-v2:16b",  # DeepSeek - MoE do kodu, tool-calling, ~8.9GB
-    "ornith:9b",              # agent kodujący, MIT, kontekst 256K, ~5.6GB
+    "gpt-oss",            # OpenAI - open-weight, reasoning/agentowy
+    "deepseek-coder-v2",  # DeepSeek - MoE do kodu, tool-calling
+    "ornith",              # agent kodujący, MIT, kontekst 256K
 ]
 
-# WHAT: podpowiedzi do pola "Rozmiar" przy pobieraniu (patrz karta "Pobierz nowy
-#       model") - typowe rozmiary spotykane w rodzinach modeli z POLECANE_MODELE
-#       wyżej, plus większe warianty (do 70B). Pole jest edytowalne - dowolny inny
-#       rozmiar da się wpisać ręcznie, to tylko podpowiedzi.
-ROZMIARY_MODELI = [
+# WHAT: RZECZYWISTE rozmiary dostępne dla każdego modelu z POLECANE_MODELE -
+#       zweryfikowane wprost na stronach tagów ollama.com/library/<model>/tags
+#       (2026-07). Pole "Rozmiar" pokazuje TYLKO te podpowiedzi, gdy wybrany
+#       model jest na tej liście (patrz _aktualizuj_liste_rozmiarow).
+# WHY:  BUG naprawiony: poprzednia wersja miała jedną wspólną listę podpowiedzi
+#       (1b-70b) dla WSZYSTKICH modeli naraz, więc appka sugerowała rozmiary,
+#       których dany model w ogóle nie ma (np. Ornith: appka pokazywała 1b-70b,
+#       a naprawdę istnieją tylko warianty 9b i 35b - wybranie czegokolwiek
+#       innego kończyłoby się błędem pobierania). Rozmiary bez większego
+#       znaczenia (Mistral, Phi-4 - jeden rozmiar bazowy) i tak są tu wpisane
+#       jawnie, żeby podpowiedź była zgodna z rzeczywistością, a nie pusta.
+# UWAGA: ta lista się starzeje, gdy Ollama doda nowe warianty - sprawdzać przy
+#        okazji aktualizacji POLECANE_MODELE.
+ROZMIARY_WG_MODELU = {
+    "llama3.2": ["1b", "3b"],
+    "llama3.1": ["8b", "70b", "405b"],
+    "gemma3": ["270m", "1b", "4b", "12b", "27b"],
+    "gemma2": ["2b", "9b", "27b"],
+    "mistral": ["7b"],
+    "phi4": ["14b"],
+    "deepseek-r1": ["1.5b", "7b", "8b", "14b", "32b", "70b", "671b"],
+    "qwen3": ["0.6b", "1.7b", "4b", "8b", "14b", "30b", "32b", "235b"],
+    "qwen2.5-coder": ["0.5b", "1.5b", "3b", "7b", "14b", "32b"],
+    "gpt-oss": ["20b", "120b"],
+    "deepseek-coder-v2": ["16b", "236b"],
+    "ornith": ["9b", "35b"],
+}
+
+# WHAT: podpowiedzi rozmiaru dla modelu spoza POLECANE_MODELE (wpisanego z ręki) -
+#       appka nie zna jego rzeczywistych wariantów, więc dostaje ogólny,
+#       orientacyjny przekrój zamiast konkretnej, zweryfikowanej listy.
+ROZMIARY_MODELI_OGOLNE = [
     "1b", "1.5b", "3b", "4b", "7b", "8b", "9b", "12b", "14b",
     "20b", "27b", "30b", "32b", "34b", "70b",
 ]
@@ -111,6 +139,14 @@ OLLAMA_ZALECANE = {
     "OLLAMA_HOST": "",
     "GGML_VK_VISIBLE_DEVICES": "0",
 }
+
+# WHAT: WSZYSTKIE zmienne, które mają dedykowane pole w formularzu zakładki
+#       Zaawansowane - używane do odróżnienia "znanych" wpisów override.conf
+#       od "własnych parametrów" (patrz _odswiez_zakladke_zaawansowane).
+# WHY:  to NIE to samo co OLLAMA_ZALECANE.keys() - OLLAMA_GPU_OVERHEAD ma pole
+#       w formularzu, ale świadomie NIE ma zalecanej wartości (zależy od tego,
+#       czy na danym hoście jest środowisko graficzne, appka tego nie zgaduje).
+OLLAMA_ZNANE_ZMIENNE = frozenset(OLLAMA_ZALECANE.keys()) | {"OLLAMA_GPU_OVERHEAD"}
 
 
 # =============================================================================
@@ -758,27 +794,128 @@ def _parsuj_rozmiar_parametrow(tekst):
     return float(dopasowanie.group(1))
 
 
-# WHAT: przybliżone bajty na parametr wg wariantu kwantyzacji - powszechnie
-#       używane w społeczności zaokrąglenia (nie liczą narzutu tokenizera/
-#       embeddingów, więc to raczej dolna granica).
-_BAJTY_NA_PARAMETR = {
-    "": 0.6,       # domyślna (Ollama zwykle ściąga Q4_0/Q4_K_M)
-    "q8_0": 1.0,
-    "fp16": 2.0,
+# WHAT: mnożnik GB/mld parametrów (bity na wagę, przeliczone) wg wariantu
+#       kwantyzacji - kalkulator pamięci dla modeli LLM (Ollama/llama.cpp).
+# WHY:  mapowanie na trzy opcje z combo_kwantyzacja: pusta ("domyślna") to
+#       najbliższy odpowiednik tego, co Ollama zwykle ściąga (Q4_K_M), Q8_0
+#       i FP16 to bezpośrednie odpowiedniki wybranych wariantów.
+_KWANTYZACJA_BPW = {
+    "": ("Q4_K_M", 0.61),
+    "q8_0": ("Q8_0", 1.06),
+    "fp16": ("FP16", 2.00),
+}
+
+# WHAT: bajty na element pamięci podręcznej kontekstu (KV cache) wg jej kwantyzacji.
+_KVQ_BAJTY_NA_ELEMENT = {
+    "f16": 2,
+    "q8_0": 1,
+    "q4_0": 0.5,
+}
+
+# WHAT: przybliżenia architektury (liczba warstw L, liczba głowic KV H_KV) wg
+#       wielkości modelu P (mld parametrów) - progi górne przedziałów.
+# WHY:  appka nie zna dokładnej architektury modelu, dopóki go nie pobierze -
+#       to tabela przybliżeń zamiast prawdziwych metadanych.
+_PRZYBLIZENIE_ARCHITEKTURY = [
+    (4, 36, 8),
+    (9, 32, 8),
+    (16, 48, 8),
+    (40, 64, 8),
+]
+_PRZYBLIZENIE_ARCHITEKTURY_MAX = (80, 8)  # P > 40
+
+_TYPOWE_WIELKOSCI_RAM = (8, 16, 32, 48, 64, 96, 128)
+
+# WHAT: kontekst i kwantyzacja cache przyjęte jako STAŁE w kalkulatorze - appka
+#       nie daje ich wybrać przy pobieraniu (kontekst ustawia się osobno w
+#       zakładce Zaawansowane; 16384 to tamtejsza zalecana wartość - patrz
+#       OLLAMA_ZALECANE). f16 to zachowanie Ollamy, dopóki ktoś świadomie nie
+#       włączy OLLAMA_FLASH_ATTENTION + kwantyzacji cache.
+_KALKULATOR_CTX = 16384
+_KALKULATOR_KVQ = "f16"
+_KALKULATOR_D = 128  # wymiar głowicy - domyślny
+
+
+# WHAT: mapowanie PRAWDZIWEJ wartości details.quantization_level z /api/tags
+#       (np. "Q4_K_M", "F16") na ten sam mnożnik BPW co _KWANTYZACJA_BPW.
+# WHY:  lista zainstalowanych modeli liczy VRAM na faktycznych metadanych
+#       Ollamy, nie na zgadywaniu - ale Ollama zna więcej wariantów, niż appka
+#       daje wybrać przy pobieraniu, stąd osobna, szersza tabela. Nieznany/
+#       nierozpoznany wariant dostaje wartość domyślną (jak Q4_K_M).
+_QUANTIZATION_LEVEL_BPW = {
+    "FP16": 2.00,
+    "F16": 2.00,
+    "Q8_0": 1.06,
+    "Q6_K": 0.82,
+    "Q5_K_M": 0.71,
+    "Q4_K_M": 0.61,
+    "Q3_K_M": 0.49,
+    "Q2_K": 0.42,
 }
 
 
-def _oszacuj_pamiec_gb(miliardy_parametrow, kwantyzacja):
-    # WHAT: (same wagi modelu w GB, zalecane minimum z zapasem na kontekst).
-    # WHY:  dokładne wyliczenie bufora na kontekst (KV cache) wymagałoby
-    #       znajomości architektury KONKRETNEGO modelu (liczba warstw, głowic
-    #       KV, czy używa GQA) - appka jej nie zna, dopóki modelu nie pobierze.
-    #       Zamiast udawać precyzję, dajemy uczciwe przybliżenie: dokładne
-    #       wagi + stały narzut 30% jako "zalecane minimum", jawnie opisany
-    #       w UI jako orientacyjny (patrz _aktualizuj_szacowana_pamiec).
-    bajty_na_parametr = _BAJTY_NA_PARAMETR.get(kwantyzacja, _BAJTY_NA_PARAMETR[""])
-    wagi_gb = miliardy_parametrow * bajty_na_parametr
-    return wagi_gb, wagi_gb * 1.3
+def _parsuj_parameter_size(tekst):
+    # WHAT: parsuje details.parameter_size z /api/tags (np. "8.0B", "134.52M")
+    #       na liczbę miliardów parametrów.
+    if not tekst:
+        return None
+    dopasowanie = re.search(r"(\d+(?:\.\d+)?)\s*([BM])\b", tekst, re.IGNORECASE)
+    if not dopasowanie:
+        return None
+    liczba = float(dopasowanie.group(1))
+    return liczba / 1000 if dopasowanie.group(2).upper() == "M" else liczba
+
+
+def _oszacuj_pamiec_bpw(miliardy_parametrow, bpw, etykieta_q):
+    # WHAT: kalkulator pamięci dla modelu LLM - wagi + KV cache + bufory,
+    #       z zapasem na system - zwraca słownik ze wszystkimi krokami
+    #       pośrednimi. Współdzielony rdzeń dla dwóch miejsc w oknie: karty
+    #       "Pobierz nowy model" (patrz _oszacuj_pamiec, kwantyzacja z combo)
+    #       i listy "Zainstalowane modele" (kwantyzacja z prawdziwych metadanych
+    #       API - patrz _QUANTIZATION_LEVEL_BPW).
+    # WHY:  poprzednia wersja liczyła tylko "wagi × 1.3" - to dawało zbyt
+    #       optymistyczny wynik przy dużym kontekście (KV cache potrafi
+    #       przewyższyć same wagi przy mniejszych modelach i długim kontekście).
+    #       KV cache liczony jest osobno, na podstawie przybliżonej architektury
+    #       (L, H_KV) dobranej wg wielkości P.
+    wagi_gb = miliardy_parametrow * bpw
+
+    l, h_kv = _PRZYBLIZENIE_ARCHITEKTURY_MAX
+    for prog, prog_l, prog_h_kv in _PRZYBLIZENIE_ARCHITEKTURY:
+        if miliardy_parametrow <= prog:
+            l, h_kv = prog_l, prog_h_kv
+            break
+
+    bajty_na_element = _KVQ_BAJTY_NA_ELEMENT[_KALKULATOR_KVQ]
+    bajty_na_token = 2 * l * h_kv * _KALKULATOR_D * bajty_na_element
+    kv_cache_gb = (bajty_na_token * _KALKULATOR_CTX) / (1024 ** 3)
+
+    bufory_gb = 0.3 + (miliardy_parametrow * 0.04)
+
+    zajete_realnie_gb = wagi_gb + kv_cache_gb + bufory_gb
+    z_zapasem_gb = zajete_realnie_gb / 0.78  # model+cache = maks. 78% pamięci, reszta dla systemu
+
+    rekomendowany_ram = next(
+        (r for r in _TYPOWE_WIELKOSCI_RAM if r >= z_zapasem_gb),
+        _TYPOWE_WIELKOSCI_RAM[-1],
+    )
+
+    return {
+        "etykieta_q": etykieta_q,
+        "wagi_gb": wagi_gb,
+        "kv_cache_gb": kv_cache_gb,
+        "bufory_gb": bufory_gb,
+        "zajete_realnie_gb": zajete_realnie_gb,
+        "z_zapasem_gb": z_zapasem_gb,
+        "rekomendowany_ram": rekomendowany_ram,
+    }
+
+
+def _oszacuj_pamiec(miliardy_parametrow, kwantyzacja):
+    # WHAT: wariant _oszacuj_pamiec_bpw dla karty "Pobierz nowy model" - bierze
+    #       kwantyzację z combo_kwantyzacja ("", "q8_0", "fp16").
+    etykieta_q, bpw = _KWANTYZACJA_BPW.get(kwantyzacja, _KWANTYZACJA_BPW[""])
+    return _oszacuj_pamiec_bpw(miliardy_parametrow, bpw, etykieta_q)
 
 
 # =============================================================================
@@ -804,12 +941,26 @@ class OllamaClient:
             return False
 
     def list_models(self):
-        # WHAT: lista nazw zainstalowanych modeli.
-        # WHY:  bierzemy tylko 'name' - reszta metadanych tu zbędna.
+        # WHAT: lista zainstalowanych modeli - nazwa, rozmiar na dysku (bajty)
+        #       i metadane kwantyzacji (details.parameter_size/quantization_level).
+        # WHY:  rozmiar do pokazania, ile miejsca zajmuje model na dysku;
+        #       parameter_size/quantization_level - do wyliczenia orientacyjnego
+        #       VRAM tym samym kalkulatorem co karta "Pobierz nowy model"
+        #       (patrz _oszacuj_pamiec_bpw), na PRAWDZIWYCH metadanych modelu,
+        #       nie na zgadywaniu rozmiaru z samej nazwy.
         try:
             r = requests.get(f"{self.base_url}/api/tags", timeout=5)
             r.raise_for_status()
-            return [m["name"] for m in r.json().get("models", [])]
+            wynik = []
+            for m in r.json().get("models", []):
+                szczegoly = m.get("details") or {}
+                wynik.append({
+                    "name": m["name"],
+                    "size": m.get("size", 0),
+                    "parameter_size": szczegoly.get("parameter_size", ""),
+                    "quantization_level": szczegoly.get("quantization_level", ""),
+                })
+            return wynik
         except requests.RequestException:
             return []
 
@@ -1126,10 +1277,14 @@ class MainWindow(QMainWindow):
         _wczytaj_jezyk(self._jezyk_aktywny)
 
         self.setWindowTitle(f"Ollama Manager {WERSJA}")
-        # WHY: zakładka "Usługi" mieści sterowanie usługą + Open WebUI jedna pod
-        #      drugą, a zakładka "Agregator modeli" dwie karty jedna pod drugą -
-        #      obu brakowało miejsca przy poprzedniej wysokości (600px).
-        self.setMinimumSize(760, 700)
+        # WHY: rosło razem z appką - "Usługi" mieści sterowanie usługą + Open
+        #      WebUI jedna pod drugą, "Agregator modeli" dwie karty jedna pod
+        #      drugą, "Zaawansowane" to teraz 10-polowy formularz + pole
+        #      własnych parametrów + dwa przyciski, a karta "Pobierz nowy
+        #      model" pokazuje wieloliniowe wyliczenie pamięci (kalkulator
+        #      wagi+KV cache+bufory) pod polami modelu/rozmiaru/kwantyzacji -
+        #      przy 760x700 część z tego się już nie mieściła bez przewijania.
+        self.setMinimumSize(860, 910)
         self._buduj_ui()
 
         # WHAT: cykliczne odświeżanie co 10 s.
@@ -1345,17 +1500,14 @@ class MainWindow(QMainWindow):
 
         # WHAT: opcjonalny rozmiar (parametry) do doklejenia do nazwy modelu -
         #       osobne pole zamiast pisania "rodzina:rozmiar" ręcznie za każdym
-        #       razem. Puste = bez zmian (nazwa z pola wyżej idzie 1:1).
-        # WHY:  appka NIE trzyma sztywnej listy "który model ma jakie rozmiary" -
-        #       to wymagałoby ręcznego utrzymywania osobnej mapy dla każdej
-        #       rodziny i i tak by się starzało przy nowych wersjach modeli na
-        #       ollama.com. Wolne, edytowalne pole z podpowiedziami (patrz
-        #       ROZMIARY_MODELI) jest prostsze i zawsze aktualne.
+        #       razem. Puste = bez zmian (nazwa z pola wyżej idzie 1:1). Lista
+        #       podpowiedzi zależy od wybranego modelu (patrz
+        #       _aktualizuj_liste_rozmiarow, ROZMIARY_WG_MODELU) - appka NIE
+        #       sugeruje już rozmiarów, których dany model w ogóle nie ma.
         pasek_rozmiar = QHBoxLayout()
         pasek_rozmiar.addWidget(QLabel(_("Rozmiar:")))
         self.combo_rozmiar = QComboBox()
         self.combo_rozmiar.setEditable(True)
-        self.combo_rozmiar.addItems(ROZMIARY_MODELI)
         self.combo_rozmiar.setCurrentText("")
         self.combo_rozmiar.lineEdit().setPlaceholderText(_("opcjonalnie, np. 8b"))
         pasek_rozmiar.addWidget(self.combo_rozmiar, 1)
@@ -1385,9 +1537,10 @@ class MainWindow(QMainWindow):
         self.lbl_szacowana_pamiec = QLabel("")
         self.lbl_szacowana_pamiec.setWordWrap(True)
         uk_pobierz.addWidget(self.lbl_szacowana_pamiec)
-        self.combo_modele.currentTextChanged.connect(self._aktualizuj_szacowana_pamiec)
+        self.combo_modele.currentTextChanged.connect(self._zmien_model_pobierania)
         self.combo_rozmiar.currentTextChanged.connect(self._aktualizuj_szacowana_pamiec)
         self.combo_kwantyzacja.currentIndexChanged.connect(self._aktualizuj_szacowana_pamiec)
+        self._aktualizuj_liste_rozmiarow()
         self._aktualizuj_szacowana_pamiec()
 
         # WHAT: krótkie wyjaśnienie, skąd wziąć nazwę modelu do pobrania.
@@ -1421,7 +1574,19 @@ class MainWindow(QMainWindow):
         pasek_usun.addStretch(1)
         pasek_usun.addWidget(self.btn_usun)
         uk_zainstalowane.addLayout(pasek_usun)
-        self.lista_modeli = QListWidget()
+        # WHAT: tabela zamiast zwykłej listy - trzy kolumny: nazwa, rozmiar na
+        #       dysku (dokładny, z /api/tags) i szacowane VRAM (patrz
+        #       _po_odswiezeniu: realne zużycie, jeśli model jest akurat
+        #       załadowany, w przeciwnym razie wyliczenie tym samym kalkulatorem
+        #       co karta "Pobierz nowy model" - _oszacuj_pamiec_bpw).
+        self.lista_modeli = QTableWidget(0, 3)
+        self.lista_modeli.setHorizontalHeaderLabels([_("Model"), _("Rozmiar na dysku"), _("VRAM")])
+        self.lista_modeli.horizontalHeader().setStretchLastSection(True)
+        self.lista_modeli.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.lista_modeli.verticalHeader().setVisible(False)
+        self.lista_modeli.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.lista_modeli.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.lista_modeli.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.lista_modeli.itemSelectionChanged.connect(self._aktualizuj_przycisk_usun)
         uk_zainstalowane.addWidget(self.lista_modeli)
         kolumny.addWidget(karta_zainstalowane, 1)
@@ -1567,6 +1732,22 @@ class MainWindow(QMainWindow):
         self.pole_ggml_vk_visible_devices.setPlaceholderText("np. 0")
         formularz.addRow("GGML_VK_VISIBLE_DEVICES", self.pole_ggml_vk_visible_devices)
 
+        # WHAT: ograniczony wybór (nie wolne pole) - wartość w bajtach zależy
+        #       tylko od tego, czy na tym hoście działa środowisko graficzne.
+        # WHY:  serwer bez X (np. BC-250 jako czysty backend) nie potrzebuje
+        #       żadnej rezerwacji; stacja robocza z pulpitem (KDE/GNOME) dzieli
+        #       tę samą pulę VRAM z kompozytorem, więc bez rezerwacji Ollama
+        #       mogłaby zająć całość i zdusić pulpit. 1 GB to bezpieczny,
+        #       orientacyjny punkt startu - do korekty przez pole "własne
+        #       parametry" niżej, jeśli potrzeba innej wartości w bajtach.
+        self.combo_gpu_overhead = QComboBox()
+        for etykieta, wartosc in [
+            (_("brak (serwer bez środowiska graficznego)"), ""),
+            (_("z pulpitem (KDE/GNOME) — 1 GB"), "1073741824"),
+        ]:
+            self.combo_gpu_overhead.addItem(etykieta, wartosc)
+        formularz.addRow("OLLAMA_GPU_OVERHEAD", self.combo_gpu_overhead)
+
         uk.addLayout(formularz)
 
         lbl_wlasne = QLabel(_("Własne parametry (jeden na linię, KLUCZ=WARTOŚĆ):"))
@@ -1633,6 +1814,11 @@ class MainWindow(QMainWindow):
                                            "(0 = pierwsze) - niezbędne na niektórych APU (np. BC-250), gdzie "
                                            "Vulkan wylicza kilka urządzeń naraz i bez tego Ollama może wybrać "
                                            "złe. Działa tylko razem z włączonym OLLAMA_VULKAN.")),
+            ("OLLAMA_GPU_OVERHEAD", _("Ile pamięci GPU (w bajtach) zarezerwować z dala od Ollamy, dla reszty "
+                                       "systemu - istotne na APU z pamięcią współdzieloną z systemem RAM. "
+                                       "Serwer bez środowiska graficznego zwykle nie potrzebuje rezerwacji; "
+                                       "stacja robocza z pulpitem (KDE/GNOME) dzieli tę samą pulę VRAM z "
+                                       "kompozytorem, więc bez rezerwacji Ollama mogłaby zająć całość.")),
         ]
         for nazwa, opis in opisy:
             lbl_nazwa = QLabel(nazwa)
@@ -1761,6 +1947,7 @@ class MainWindow(QMainWindow):
             self.pole_keep_alive, self.pole_context_length, self.pole_max_loaded,
             self.pole_num_parallel, self.combo_flash_attention, self.combo_kv_cache,
             self.chk_vulkan, self.chk_igpu, self.chk_host, self.pole_ggml_vk_visible_devices,
+            self.combo_gpu_overhead,
             self.pole_wlasne_zmienne, self.btn_zalecane_zaawansowane, self.btn_zapisz_zaawansowane,
         ):
             widget.setEnabled(stan["zainstalowana"])
@@ -1784,13 +1971,13 @@ class MainWindow(QMainWindow):
         self.chk_igpu.setChecked(env.get("OLLAMA_IGPU_ENABLE") not in ("0", "false"))
         self.chk_host.setChecked(bool(env.get("OLLAMA_HOST")))
         self.pole_ggml_vk_visible_devices.setText(env.get("GGML_VK_VISIBLE_DEVICES", ""))
+        self._ustaw_combo_wg_wartosci(self.combo_gpu_overhead, env.get("OLLAMA_GPU_OVERHEAD", ""))
 
-        # WHY: pola/checkboxy wyżej pokrywają 9 "znanych" zmiennych - wszystko
-        #      inne, co siedzi w override.conf (np. dopisane ręcznie kiedyś
-        #      przez systemctl edit), ląduje w polu "własne parametry", żeby
-        #      formularz niczego nie gubił przy następnym zapisie.
-        znane = set(OLLAMA_ZALECANE.keys())
-        wlasne = [f"{k}={v}" for k, v in env.items() if k not in znane]
+        # WHY: pola/checkboxy wyżej pokrywają "znane" zmienne (OLLAMA_ZNANE_ZMIENNE) -
+        #      wszystko inne, co siedzi w override.conf (np. dopisane ręcznie
+        #      kiedyś przez systemctl edit), ląduje w polu "własne parametry",
+        #      żeby formularz niczego nie gubił przy następnym zapisie.
+        wlasne = [f"{k}={v}" for k, v in env.items() if k not in OLLAMA_ZNANE_ZMIENNE]
         self.pole_wlasne_zmienne.setPlainText("\n".join(wlasne))
 
     def _po_odswiezeniu(self, stan):
@@ -1825,14 +2012,41 @@ class MainWindow(QMainWindow):
 
         self._odswiez_zakladke_zaawansowane(stan)
 
-        # Odśwież listę modeli, zachowując zaznaczenie jeśli się da
+        # Odśwież tabelę modeli, zachowując zaznaczenie jeśli się da
+        # WHY: kolumna "VRAM" pokazuje REALNE zużycie (z /api/ps), jeśli model
+        #      jest akurat załadowany, albo orientacyjne wyliczenie tym samym
+        #      kalkulatorem co karta "Pobierz nowy model" - na podstawie
+        #      prawdziwych details.parameter_size/quantization_level z
+        #      /api/tags, nie zgadywania rozmiaru z nazwy.
+        vram_wg_nazwy = {m.get("name", "?"): m.get("size_vram", 0) for m in stan["zaladowane"]}
         zaznaczony = self._wybrany_model()
-        self.lista_modeli.clear()
-        self.lista_modeli.addItems(stan["models"])
+        self.lista_modeli.setRowCount(0)
+        for m in stan["models"]:
+            nazwa = m["name"]
+            rozmiar_gb = m.get("size", 0) / (1024 ** 3)
+
+            if nazwa in vram_wg_nazwy:
+                vram_tekst = _("{gb:.1f} GB (załadowany)").format(gb=vram_wg_nazwy[nazwa] / (1024 ** 3))
+            else:
+                miliardy = _parsuj_parameter_size(m.get("parameter_size", ""))
+                if miliardy is None:
+                    vram_tekst = "—"
+                else:
+                    bpw = _QUANTIZATION_LEVEL_BPW.get(
+                        (m.get("quantization_level") or "").upper(), _KWANTYZACJA_BPW[""][1]
+                    )
+                    oszacowanie = _oszacuj_pamiec_bpw(miliardy, bpw, "")
+                    vram_tekst = _("~{gb:.1f} GB").format(gb=oszacowanie["zajete_realnie_gb"])
+
+            wiersz = self.lista_modeli.rowCount()
+            self.lista_modeli.insertRow(wiersz)
+            self.lista_modeli.setItem(wiersz, 0, QTableWidgetItem(nazwa))
+            self.lista_modeli.setItem(wiersz, 1, QTableWidgetItem(f"{rozmiar_gb:.1f} GB"))
+            self.lista_modeli.setItem(wiersz, 2, QTableWidgetItem(vram_tekst))
         if zaznaczony:
-            for i in range(self.lista_modeli.count()):
-                if self.lista_modeli.item(i).text() == zaznaczony:
-                    self.lista_modeli.setCurrentRow(i)
+            for i in range(self.lista_modeli.rowCount()):
+                if self.lista_modeli.item(i, 0).text() == zaznaczony:
+                    self.lista_modeli.setCurrentCell(i, 0)
                     break
 
         # Odśwież listę modeli załadowanych do pamięci (VRAM)
@@ -2054,6 +2268,9 @@ class MainWindow(QMainWindow):
         ggml_vk_visible_devices = self.pole_ggml_vk_visible_devices.text().strip()
         if ggml_vk_visible_devices:
             zmienne["GGML_VK_VISIBLE_DEVICES"] = ggml_vk_visible_devices
+        gpu_overhead = self.combo_gpu_overhead.currentData()
+        if gpu_overhead:
+            zmienne["OLLAMA_GPU_OVERHEAD"] = gpu_overhead
 
         for numer, linia in enumerate(self.pole_wlasne_zmienne.toPlainText().splitlines(), start=1):
             linia = linia.strip()
@@ -2206,7 +2423,10 @@ class MainWindow(QMainWindow):
 
     # --- Modele ---
     def _wybrany_model(self):
-        item = self.lista_modeli.currentItem()
+        wiersz = self.lista_modeli.currentRow()
+        if wiersz < 0:
+            return None
+        item = self.lista_modeli.item(wiersz, 0)
         return item.text() if item else None
 
     def _aktualizuj_przycisk_usun(self):
@@ -2229,6 +2449,28 @@ class MainWindow(QMainWindow):
             lambda: self.client.delete_model(model), _("Usunięcie {model}").format(model=model)
         )
 
+    def _aktualizuj_liste_rozmiarow(self):
+        # WHAT: podmienia podpowiedzi w polu "Rozmiar" na te NAPRAWDĘ dostępne
+        #       dla wybranego modelu (ROZMIARY_WG_MODELU), albo ogólny przekrój
+        #       (ROZMIARY_MODELI_OGOLNE), jeśli model nie jest na tej liście.
+        # WHY:  BUG naprawiony - wcześniej appka pokazywała TE SAME podpowiedzi
+        #       (1b-70b) dla każdego modelu, więc sugerowała rozmiary, których
+        #       dany model wcale nie ma (np. Ornith ma tylko 9b/35b). Nie
+        #       czyścimy przy tym tego, co user już wpisał ręcznie do pola -
+        #       zmieniają się tylko podpowiedzi w rozwijanej liście.
+        model = self.combo_modele.currentText().strip()
+        rozmiary = ROZMIARY_WG_MODELU.get(model, ROZMIARY_MODELI_OGOLNE)
+        wpisany_tekst = self.combo_rozmiar.currentText()
+        self.combo_rozmiar.blockSignals(True)
+        self.combo_rozmiar.clear()
+        self.combo_rozmiar.addItems(rozmiary)
+        self.combo_rozmiar.setCurrentText(wpisany_tekst)
+        self.combo_rozmiar.blockSignals(False)
+
+    def _zmien_model_pobierania(self):
+        self._aktualizuj_liste_rozmiarow()
+        self._aktualizuj_szacowana_pamiec()
+
     def _aktualizuj_szacowana_pamiec(self):
         # WHAT: przelicza i pokazuje orientacyjne zużycie pamięci dla aktualnie
         #       wpisanego rozmiaru + kwantyzacji - na żywo, przy każdej zmianie.
@@ -2244,14 +2486,31 @@ class MainWindow(QMainWindow):
             )
             return
         kwantyzacja = self.combo_kwantyzacja.currentData()
-        wagi_gb, zalecane_gb = _oszacuj_pamiec_gb(miliardy, kwantyzacja)
-        self.lbl_szacowana_pamiec.setText(
-            _("Szacowane zużycie pamięci: same wagi ~{wagi:.1f} GB, zalecane minimum "
-              "(orientacyjnie, z zapasem na kontekst) ~{zalecane:.1f} GB. Rzeczywiste "
-              "zużycie zależy od długości kontekstu i architektury modelu.").format(
-                wagi=wagi_gb, zalecane=zalecane_gb
-            )
+        w = _oszacuj_pamiec(miliardy, kwantyzacja)
+
+        tresc = _(
+            "Model: {p:.0f}B {kwant}, kontekst {ctx} ({kvq})\n"
+            "Wagi: {wagi:.1f} GB\n"
+            "KV cache: {kv_cache:.1f} GB\n"
+            "Bufory: {bufory:.1f} GB\n"
+            "Realnie zajęte: {zajete:.1f} GB\n"
+            "Z zapasem: {z_zapasem:.1f} GB\n"
+            "Rekomendowany RAM: {rekomendowany} GB"
+        ).format(
+            p=miliardy, kwant=w["etykieta_q"], ctx=_KALKULATOR_CTX, kvq=_KALKULATOR_KVQ,
+            wagi=w["wagi_gb"], kv_cache=w["kv_cache_gb"], bufory=w["bufory_gb"],
+            zajete=w["zajete_realnie_gb"], z_zapasem=w["z_zapasem_gb"],
+            rekomendowany=w["rekomendowany_ram"],
         )
+        if w["kv_cache_gb"] > w["wagi_gb"]:
+            tresc += "\n" + _(
+                "Uwaga: cache kontekstu przewyższa wagi modelu — rozważ mniejszy "
+                "kontekst lub kwantyzację cache."
+            )
+        tresc += "\n" + _(
+            "Na APU / pamięci współdzielonej zarezerwuj pamięć dla systemu przez OLLAMA_GPU_OVERHEAD."
+        )
+        self.lbl_szacowana_pamiec.setText(tresc)
 
     def pobierz_model(self):
         model_wpisany = self.combo_modele.currentText().strip()

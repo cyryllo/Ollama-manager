@@ -84,13 +84,16 @@ EOF
 #      the packages that provide the dependencies on Debian/Ubuntu (2026).
 #      'pkexec' as its own package, NOT 'policykit-1' - polkit was split into
 #      polkitd/pkexec, 'policykit-1' is now just a transitional metapackage.
+#      'curl' as Depends too - not every system has it by default, but the
+#      app's own install buttons need it (Ollama's official installer, and
+#      the uv bootstrap used for Open WebUI/LiteLLM).
 cat > "$BUILD_DIR/DEBIAN/control" <<EOF
 Package: $PACKAGE_NAME
 Version: $VERSION
 Section: utils
 Priority: optional
 Architecture: all
-Depends: python3, python3-pyqt6, python3-requests, pkexec, systemd
+Depends: python3, python3-pyqt6, python3-requests, pkexec, systemd, curl
 Maintainer: Cyryl Sochacki <cyrylsochacki@gmail.com>
 Homepage: https://github.com/cyryllo/Ollama-manager
 Description: Ollama service and model manager for KDE (PyQt6)

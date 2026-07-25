@@ -149,6 +149,15 @@
   "Rozmiar:": "Size:",
   "opcjonalnie, np. 8b": "optional, e.g. 8b",
   "Szacowane zużycie pamięci: podaj rozmiar modelu (np. 8b), żeby zobaczyć wyliczenie.": "Estimated memory usage: enter the model size (e.g. 8b) to see the estimate.",
-  "Szacowane zużycie pamięci: same wagi ~{wagi:.1f} GB, zalecane minimum (orientacyjnie, z zapasem na kontekst) ~{zalecane:.1f} GB. Rzeczywiste zużycie zależy od długości kontekstu i architektury modelu.": "Estimated memory usage: weights alone ~{wagi:.1f} GB, recommended minimum (approximate, with a context buffer) ~{zalecane:.1f} GB. Actual usage depends on context length and model architecture.",
-  "Który indeks urządzenia Vulkan ma być widoczny dla backendu (0 = pierwsze) - niezbędne na niektórych APU (np. BC-250), gdzie Vulkan wylicza kilka urządzeń naraz i bez tego Ollama może wybrać złe. Działa tylko razem z włączonym OLLAMA_VULKAN.": "Which Vulkan device index should be visible to the backend (0 = first) - necessary on some APUs (e.g. BC-250), where Vulkan enumerates several devices at once and without this Ollama might pick the wrong one. Only has an effect together with OLLAMA_VULKAN enabled."
+  "Który indeks urządzenia Vulkan ma być widoczny dla backendu (0 = pierwsze) - niezbędne na niektórych APU (np. BC-250), gdzie Vulkan wylicza kilka urządzeń naraz i bez tego Ollama może wybrać złe. Działa tylko razem z włączonym OLLAMA_VULKAN.": "Which Vulkan device index should be visible to the backend (0 = first) - necessary on some APUs (e.g. BC-250), where Vulkan enumerates several devices at once and without this Ollama might pick the wrong one. Only has an effect together with OLLAMA_VULKAN enabled.",
+  "Model: {p:.0f}B {kwant}, kontekst {ctx} ({kvq})\nWagi: {wagi:.1f} GB\nKV cache: {kv_cache:.1f} GB\nBufory: {bufory:.1f} GB\nRealnie zajęte: {zajete:.1f} GB\nZ zapasem: {z_zapasem:.1f} GB\nRekomendowany RAM: {rekomendowany} GB": "Model: {p:.0f}B {kwant}, context {ctx} ({kvq})\nWeights: {wagi:.1f} GB\nKV cache: {kv_cache:.1f} GB\nBuffers: {bufory:.1f} GB\nActually used: {zajete:.1f} GB\nWith headroom: {z_zapasem:.1f} GB\nRecommended RAM: {rekomendowany} GB",
+  "Uwaga: cache kontekstu przewyższa wagi modelu — rozważ mniejszy kontekst lub kwantyzację cache.": "Note: the context cache exceeds the model weights — consider a smaller context or a quantized cache.",
+  "Na APU / pamięci współdzielonej zarezerwuj pamięć dla systemu przez OLLAMA_GPU_OVERHEAD.": "On an APU / shared memory, reserve RAM for the system via OLLAMA_GPU_OVERHEAD.",
+  "Model": "Model",
+  "Rozmiar na dysku": "Size on disk",
+  "{gb:.1f} GB (załadowany)": "{gb:.1f} GB (loaded)",
+  "~{gb:.1f} GB": "~{gb:.1f} GB",
+  "brak (serwer bez środowiska graficznego)": "none (server without a desktop environment)",
+  "z pulpitem (KDE/GNOME) — 1 GB": "with a desktop (KDE/GNOME) — 1 GB",
+  "Ile pamięci GPU (w bajtach) zarezerwować z dala od Ollamy, dla reszty systemu - istotne na APU z pamięcią współdzieloną z systemem RAM. Serwer bez środowiska graficznego zwykle nie potrzebuje rezerwacji; stacja robocza z pulpitem (KDE/GNOME) dzieli tę samą pulę VRAM z kompozytorem, więc bez rezerwacji Ollama mogłaby zająć całość.": "How much GPU memory (in bytes) to keep away from Ollama, for the rest of the system - relevant on APUs with memory shared with system RAM. A server without a desktop environment usually needs no reservation; a workstation with a desktop (KDE/GNOME) shares the same VRAM pool with the compositor, so without a reservation Ollama could take all of it."
 }

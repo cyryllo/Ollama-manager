@@ -8,7 +8,10 @@
 #        reinstalling (same version), or warns before overwriting a newer
 #        installed version with an older one. A separate flag removes the app.
 #  WHY:  everything lands in $HOME - no sudo, no touching the system beyond
-#        one .desktop file, per the "no root where avoidable" principle.
+#        one .desktop file, per the "no root where avoidable" principle. The
+#        one exception: two system packages (curl, python3-pip) that need
+#        apt/root if missing - offered with an explicit, confirmed prompt
+#        each time, never installed silently.
 #
 #  Run:      ./install.sh
 #  Uninstall: ./install.sh --uninstall
@@ -38,6 +41,22 @@ _compare_versions() {
     else
         echo "newer"
     fi
+}
+
+_confirm_apt_install() {
+    # WHAT: asks before installing a system package via apt (needs sudo).
+    # WHY:  install.sh otherwise never touches anything outside $HOME - this
+    #       is the one exception, so it must be an explicit, confirmed choice
+    #       every time, never a silent sudo call. Used for both curl and
+    #       python3-pip below.
+    local package="$1"
+    local reason="$2"
+    echo "$reason"
+    read -r -p "Install '$package' now via 'sudo apt install $package'? [Y/n] " ANSWER || true
+    case "$ANSWER" in
+        [nN]*) return 1 ;;
+        *) sudo apt install -y "$package" ;;
+    esac
 }
 
 remove_app() {
@@ -108,9 +127,14 @@ install_python_deps() {
     fi
 
     if ! python3 -m pip --version >/dev/null 2>&1; then
-        echo "pip is not available for python3." >&2
-        echo "Install it first: sudo apt install python3-pip" >&2
-        exit 1
+        _confirm_apt_install python3-pip "pip is not available for python3 - it's needed to install PyQt6/requests." || {
+            echo "Cancelled - pip is required to install PyQt6/requests." >&2
+            exit 1
+        }
+        if ! python3 -m pip --version >/dev/null 2>&1; then
+            echo "pip still not available after installing python3-pip." >&2
+            exit 1
+        fi
     fi
 
     echo "Installing PyQt6 and requests for the current user..."
@@ -136,6 +160,16 @@ install_python_deps() {
 command -v python3 >/dev/null 2>&1 || {
     echo "python3 not found. Install it first: sudo apt install python3" >&2
     exit 1
+}
+
+# WHY: not every system has curl by default, but the app's own install
+#      buttons need it (Ollama's official installer, and the uv bootstrap
+#      used for Open WebUI/LiteLLM) - offered now instead of failing later,
+#      confusingly, from inside the running app.
+command -v curl >/dev/null 2>&1 || {
+    _confirm_apt_install curl \
+        "curl is not installed - the app needs it for its own install buttons (Ollama, and uv for Open WebUI/LiteLLM)." \
+        || echo "Skipping curl - those in-app install buttons won't work until it's installed."
 }
 
 install_python_deps
