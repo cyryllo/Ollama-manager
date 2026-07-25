@@ -72,9 +72,9 @@ python3 ollama_manager.py
   Qwen, GPT-OSS, Ornith...) i paskiem postępu
 - Wybór rozmiaru i kwantyzacji (domyślna/Q8_0/pełna F16) przy pobieraniu — obie listy są
   dopasowane do wybranego modelu (a kwantyzacja dodatkowo do rozmiaru), zweryfikowane na
-  ollama.com/library; Q8_0/F16 pokazują się tylko tam, gdzie potwierdzono, że taki dokładny
-  tag istnieje, bo większość modeli wymaga dodatkowego segmentu w tagu (np. "instruct"),
-  nie samego rozmiaru i kwantyzacji
+  ollama.com/library; dla modeli wymagających dodatkowego segmentu w tagu przy niedomyślnej
+  kwantyzacji (np. "instruct"/"it") appka dokleja go sama — Q8_0/F16 w ogóle się pokazują
+  tylko tam, gdzie potwierdzono, że działający tag istnieje
 - Bieżące, orientacyjne wyliczenie zużycia pamięci (wagi + KV cache + bufory, plus zalecany RAM)
   przy wyborze rozmiaru/kwantyzacji
 - Podgląd modeli aktualnie załadowanych do pamięci (VRAM)

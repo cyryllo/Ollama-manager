@@ -71,9 +71,9 @@ python3 ollama_manager.py
 - Downloading new models with suggestions of popular ones (Llama, Gemma, Mistral, Phi, DeepSeek,
   Qwen, GPT-OSS, Ornith...) and a progress bar
 - Size and quantization picker (default/Q8_0/full F16) when pulling — both lists are specific to
-  the selected model (and size, for quantization), verified against ollama.com/library; Q8_0/F16
-  only show up where that exact tag was confirmed to exist, since most models need an extra
-  segment in the tag (e.g. "instruct") that isn't just size+quantization
+  the selected model (and size, for quantization), verified against ollama.com/library; for models
+  that need an extra tag segment for non-default quantization (e.g. "instruct"/"it"), the app adds
+  it automatically — Q8_0/F16 only show up at all where a working tag was confirmed to exist
 - Live, approximate memory-usage estimate (weights + KV cache + buffers, then a recommended-RAM
   figure) as you pick a size/quantization
 - Preview of models currently loaded into memory (VRAM)

@@ -42,7 +42,7 @@ from PyQt6.QtWidgets import (
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.4.15"
+WERSJA = "0.4.16"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -121,33 +121,43 @@ ROZMIARY_MODELI_OGOLNE = [
     "20b", "27b", "30b", "32b", "34b", "70b",
 ]
 
-# WHAT: kwantyzacje (Q8_0/F16) POTWIERDZONE jako realnie pobieralny tag - appka
-#       dokleja kwantyzację wprost po rozmiarze ("rozmiar-kwantyzacja", np.
-#       "14b-q8_0") tylko dla modeli/rozmiarów z tej listy. Zweryfikowane
-#       bezpośrednio (HTTP 200 kontra 404 na konkretnym tagu) na ollama.com,
-#       2026-07 - nie zgadywane.
-# WHY:  BUG naprawiony - appka zakładała, że KAŻDY model akceptuje płaski
-#       format "rozmiar-kwantyzacja", ale większość modeli (Llama, Gemma,
-#       Mistral, Qwen-Coder) wymaga dodatkowego segmentu W ŚRODKU tagu (np.
-#       "8b-instruct-q8_0", NIE "8b-q8_0"; Gemma używa "-it-" zamiast
-#       "-instruct-") - appka go nie dokleja, więc wybranie Q8_0/F16 dla
-#       takich modeli kończyłoby się błędem 404/"manifest unknown" przy
-#       pobieraniu. DeepSeek-R1 ma segment RÓŻNY dla różnych rozmiarów
-#       (llama-distill/qwen-distill/0528-qwen3, zależnie od rozmiaru) - zbyt
-#       niejednolite, żeby bezpiecznie zgadywać, więc kwantyzacja jest dla
-#       niego całkiem wyłączona (tylko "domyślna"). Modele NIEobjęte tą listą
-#       (albo objęte, ale bez danego wariantu) dostają WYŁĄCZNIE "domyślną" -
-#       bezpieczniej pokazać mniej opcji niż zbudować tag, który się nie pobierze.
+# WHAT: dla każdego modelu - (zbiór kwantyzacji POTWIERDZONYCH jako realnie
+#       pobieralny tag, segment do wstawienia W ŚRODKU tagu między rozmiarem
+#       a kwantyzacją). Zweryfikowane bezpośrednio (HTTP 200 kontra 404 na
+#       konkretnym tagu, kilka rozmiarów i oba warianty na model) na
+#       ollama.com, 2026-07 - nie zgadywane.
+# WHY:  BUG naprawiony (dwukrotnie) - appka najpierw zakładała, że KAŻDY model
+#       akceptuje płaski format "rozmiar-kwantyzacja" (np. "8b-q8_0"), co dla
+#       większości modeli (Llama, Gemma, Mistral, Qwen-Coder) kończyło się
+#       404/"manifest unknown" - naprawdę potrzebują dodatkowego segmentu W
+#       ŚRODKU tagu ("8b-instruct-q8_0"; Gemma używa "-it-" zamiast
+#       "-instruct-"). Pierwsza poprawka po prostu WYŁĄCZAŁA Q8_0/F16 dla
+#       takich modeli (bezpieczne, ale ograniczające) - ta wersja zamiast
+#       tego dokleja poprawny segment, więc wybór działa naprawdę, nie tylko
+#       się nie psuje. DeepSeek-R1 ma segment RÓŻNY dla różnych rozmiarów
+#       (llama-distill/qwen-distill/0528-qwen3, zależnie od rozmiaru) -
+#       DeepSeek-Coder-V2 z zgadywanym "instruct" dał 404 (czyli używa innego,
+#       nieznanego słowa) - oba zbyt niepewne, żeby zgadywać, więc kwantyzacja
+#       zostaje dla nich wyłączona (tylko "domyślna"). Modele NIEobjęte tą
+#       listą dostają WYŁĄCZNIE "domyślną" - bezpieczniej pokazać mniej opcji
+#       niż zbudować tag, który się nie pobierze.
 KWANTYZACJE_WG_MODELU = {
-    "phi4": {"q8_0", "fp16"},
-    "qwen3": {"q8_0", "fp16"},  # UWAGA: NIE dotyczy rozmiarów MoE - patrz KWANTYZACJE_WYJATKI_ROZMIAROW
-    "ornith": {"q8_0"},  # fp16 NIE istnieje (jest "bf16", którego appka nie oferuje jako opcję)
+    "llama3.2": ({"q8_0", "fp16"}, "instruct"),
+    "llama3.1": ({"q8_0", "fp16"}, "instruct"),
+    "gemma3": ({"q8_0", "fp16"}, "it"),
+    "gemma2": ({"q8_0", "fp16"}, "instruct"),
+    "mistral": ({"q8_0", "fp16"}, "instruct"),
+    "qwen2.5-coder": ({"q8_0", "fp16"}, "instruct"),
+    "phi4": ({"q8_0", "fp16"}, ""),
+    "qwen3": ({"q8_0", "fp16"}, ""),  # UWAGA: NIE dotyczy rozmiarów MoE - patrz KWANTYZACJE_WYJATKI_ROZMIAROW
+    "ornith": ({"q8_0"}, ""),  # fp16 NIE istnieje (jest "bf16", którego appka nie oferuje jako opcję)
 }
 
 # WHAT: wyjątki dla KONKRETNYCH (model, rozmiar), gdzie ogólna reguła z
 #       KWANTYZACJE_WG_MODELU wyżej nie obowiązuje - puste set() = tylko domyślna.
 # WHY:  qwen3:30b i qwen3:235b to warianty MoE (tag "a3b-"/"a22b-" w środku,
-#       np. "30b-a3b-q8_0") - inny wzorzec niż reszta rozmiarów tego modelu.
+#       inny wzorzec niż reszta rozmiarów tego modelu) - dokładny format
+#       niepotwierdzony bezpośrednio, więc appka nie zgaduje.
 KWANTYZACJE_WYJATKI_ROZMIAROW = {
     ("qwen3", "30b"): set(),
     ("qwen3", "235b"): set(),
@@ -158,7 +168,11 @@ def _dostepne_kwantyzacje(model, rozmiar):
     wyjatek = KWANTYZACJE_WYJATKI_ROZMIAROW.get((model, rozmiar))
     if wyjatek is not None:
         return wyjatek
-    return KWANTYZACJE_WG_MODELU.get(model, set())
+    return KWANTYZACJE_WG_MODELU.get(model, (set(), ""))[0]
+
+
+def _segment_kwantyzacji(model):
+    return KWANTYZACJE_WG_MODELU.get(model, (set(), ""))[1]
 
 # WHAT: profil startowy dla przycisku "Zastosuj zalecane wartości" w zakładce
 #       Zaawansowane - wypełnia formularz, NIC nie zapisuje samo z siebie.
@@ -799,13 +813,17 @@ def litellm_autostart(wlacz, serwery):
 def _zbuduj_tag_modelu(model, rozmiar, kwantyzacja):
     # WHAT: dokleja rozmiar i/albo wariant kwantyzacji do tagu modelu przed
     #       pobraniem, oddzielone myślnikiem (konwencja Ollamy - np. "8b-q8_0").
+    #       Jeśli wybrano kwantyzację I dany model wymaga dodatkowego segmentu
+    #       w środku tagu (np. "instruct"/"it" - patrz KWANTYZACJE_WG_MODELU),
+    #       segment ląduje MIĘDZY rozmiarem a kwantyzacją: "8b-instruct-q8_0".
     # WHY:  jeśli nazwa modelu ma już tag (po dwukropku, np. wybrany wprost z
     #       listy podpowiedzi "llama3.1:8b"), doklejamy do NIEGO; jeśli nazwa
     #       to sam człon rodziny bez tagu (czyli wskazywałaby "latest"),
-    #       rozmiar/kwantyzacja stają się całym tagiem. Nie każdy model
-    #       publikuje każdy rozmiar/wariant - to tylko doklejenie tekstu,
-    #       appka NIE sprawdza z góry, czy taki tag istnieje w rejestrze
-    #       Ollamy (błąd wyjdzie dopiero przy pobieraniu, patrz PullWorker).
+    #       rozmiar/kwantyzacja stają się całym tagiem. Segment jest doklejany
+    #       tylko wtedy, gdy appka go ZNA i zweryfikowała (patrz
+    #       KWANTYZACJE_WG_MODELU) - _aktualizuj_liste_kwantyzacji już wcześniej
+    #       dba o to, żeby kwantyzacja w ogóle nie była wybieralna dla modeli
+    #       bez takiej weryfikacji, więc to tylko dopięcie tej samej logiki.
     model = model.strip()
     if ":" in model:
         repo, czesci_tagu = model.split(":", 1)
@@ -815,6 +833,9 @@ def _zbuduj_tag_modelu(model, rozmiar, kwantyzacja):
     if rozmiar:
         czesci_tagu.append(rozmiar.strip())
     if kwantyzacja:
+        segment = _segment_kwantyzacji(repo)
+        if segment:
+            czesci_tagu.append(segment)
         czesci_tagu.append(kwantyzacja)
     if not czesci_tagu:
         return repo
@@ -1901,12 +1922,15 @@ class MainWindow(QMainWindow):
         lbl_modele = QLabel(
             _("Pole \"Rozmiar\" pokazuje tylko warianty, które dany model NAPRAWDĘ ma "
               "opublikowane na ollama.com/library - appka nie zgaduje. Pole \"Kwantyzacja\" "
-              "jest jeszcze bardziej ostrożne: Q8_0/F16 pokazują się tylko tam, gdzie "
-              "sprawdzono wprost, że taki tag istnieje - większość modeli (Llama, Gemma, "
-              "Mistral, Qwen-Coder) wymaga w tagu dodatkowego segmentu (np. \"instruct\"/\"it\"), "
-              "którego appka nie dokleja, więc dla nich zostaje tylko opcja domyślna. Brak "
-              "Q8_0/F16 przy wybranym modelu nie jest błędem - to appka celowo nie proponuje "
-              "tagu, który i tak by się nie pobrał.")
+              "jest równie ostrożne: Q8_0/F16 pokazują się tylko tam, gdzie sprawdzono "
+              "wprost, że taki tag istnieje. Część modeli (Llama, Gemma, Mistral, "
+              "Qwen-Coder) wymaga w tagu dodatkowego segmentu (np. \"instruct\"/\"it\") - "
+              "appka dokleja go automatycznie, więc wybór Q8_0/F16 dla nich realnie działa. "
+              "Dla kilku innych (DeepSeek-R1, DeepSeek-Coder-V2, GPT-OSS, warianty MoE "
+              "Qwen3 30B/235B) zostaje tylko opcja domyślna, bo format tagu jest zbyt "
+              "niejednolity/niepewny albo taki wariant w ogóle nie istnieje. Brak Q8_0/F16 "
+              "przy wybranym modelu nie jest błędem - to appka celowo nie proponuje tagu, "
+              "który i tak by się nie pobrał.")
         )
         lbl_modele.setWordWrap(True)
         uk_modele.addWidget(lbl_modele)
