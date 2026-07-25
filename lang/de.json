@@ -157,7 +157,8 @@
   "Rozmiar na dysku": "Größe auf der Festplatte",
   "{gb:.1f} GB (załadowany)": "{gb:.1f} GB (geladen)",
   "~{gb:.1f} GB": "~{gb:.1f} GB",
-  "brak (serwer bez środowiska graficznego)": "keine (Server ohne Desktop-Umgebung)",
-  "z pulpitem (KDE/GNOME) — 1 GB": "mit Desktop (KDE/GNOME) — 1 GB",
-  "Ile pamięci GPU (w bajtach) zarezerwować z dala od Ollamy, dla reszty systemu - istotne na APU z pamięcią współdzieloną z systemem RAM. Serwer bez środowiska graficznego zwykle nie potrzebuje rezerwacji; stacja robocza z pulpitem (KDE/GNOME) dzieli tę samą pulę VRAM z kompozytorem, więc bez rezerwacji Ollama mogłaby zająć całość.": "Wie viel GPU-Speicher (in Bytes) von Ollama ferngehalten werden soll, für den Rest des Systems - relevant bei APUs mit Speicher, der sich das System-RAM teilt. Ein Server ohne Desktop-Umgebung braucht normalerweise keine Reservierung; eine Workstation mit Desktop (KDE/GNOME) teilt sich denselben VRAM-Pool mit dem Compositor, ohne Reservierung könnte Ollama also alles beanspruchen."
+  "Ile pamięci GPU (w bajtach) zarezerwować z dala od Ollamy, dla reszty systemu - istotne na APU z pamięcią współdzieloną z systemem RAM. Serwer bez środowiska graficznego zwykle nie potrzebuje rezerwacji; stacja robocza z pulpitem (KDE/GNOME) dzieli tę samą pulę VRAM z kompozytorem, więc bez rezerwacji Ollama mogłaby zająć całość.": "Wie viel GPU-Speicher (in Bytes) von Ollama ferngehalten werden soll, für den Rest des Systems - relevant bei APUs mit Speicher, der sich das System-RAM teilt. Ein Server ohne Desktop-Umgebung braucht normalerweise keine Reservierung; eine Workstation mit Desktop (KDE/GNOME) teilt sich denselben VRAM-Pool mit dem Compositor, ohne Reservierung könnte Ollama also alles beanspruchen.",
+  "Cache {kvq} działa TYLKO z OLLAMA_FLASH_ATTENTION=1 (zakładka Zaawansowane) - bez tego Ollama i tak liczy cache jak f16, czyli więcej niż wyliczono wyżej.": "Der {kvq}-Cache funktioniert NUR mit OLLAMA_FLASH_ATTENTION=1 (Tab Erweitert) - ohne das berechnet Ollama den Cache trotzdem als f16, also mehr als oben geschätzt.",
+  "pulpit (GNOME/KDE)": "Desktop (GNOME/KDE)",
+  "serwer (bez X-ów)": "Server (ohne X)"
 }

@@ -157,7 +157,8 @@
   "Rozmiar na dysku": "Tamaño en disco",
   "{gb:.1f} GB (załadowany)": "{gb:.1f} GB (cargado)",
   "~{gb:.1f} GB": "~{gb:.1f} GB",
-  "brak (serwer bez środowiska graficznego)": "ninguna (servidor sin entorno de escritorio)",
-  "z pulpitem (KDE/GNOME) — 1 GB": "con escritorio (KDE/GNOME) — 1 GB",
-  "Ile pamięci GPU (w bajtach) zarezerwować z dala od Ollamy, dla reszty systemu - istotne na APU z pamięcią współdzieloną z systemem RAM. Serwer bez środowiska graficznego zwykle nie potrzebuje rezerwacji; stacja robocza z pulpitem (KDE/GNOME) dzieli tę samą pulę VRAM z kompozytorem, więc bez rezerwacji Ollama mogłaby zająć całość.": "Cuánta memoria de GPU (en bytes) mantener alejada de Ollama, para el resto del sistema - relevante en APU con memoria compartida con la RAM del sistema. Un servidor sin entorno de escritorio normalmente no necesita reserva; una estación de trabajo con escritorio (KDE/GNOME) comparte el mismo grupo de VRAM con el compositor, así que sin reserva Ollama podría ocuparlo todo."
+  "Ile pamięci GPU (w bajtach) zarezerwować z dala od Ollamy, dla reszty systemu - istotne na APU z pamięcią współdzieloną z systemem RAM. Serwer bez środowiska graficznego zwykle nie potrzebuje rezerwacji; stacja robocza z pulpitem (KDE/GNOME) dzieli tę samą pulę VRAM z kompozytorem, więc bez rezerwacji Ollama mogłaby zająć całość.": "Cuánta memoria de GPU (en bytes) mantener alejada de Ollama, para el resto del sistema - relevante en APU con memoria compartida con la RAM del sistema. Un servidor sin entorno de escritorio normalmente no necesita reserva; una estación de trabajo con escritorio (KDE/GNOME) comparte el mismo grupo de VRAM con el compositor, así que sin reserva Ollama podría ocuparlo todo.",
+  "Cache {kvq} działa TYLKO z OLLAMA_FLASH_ATTENTION=1 (zakładka Zaawansowane) - bez tego Ollama i tak liczy cache jak f16, czyli więcej niż wyliczono wyżej.": "La caché {kvq} SOLO funciona con OLLAMA_FLASH_ATTENTION=1 (pestaña Avanzado) - sin eso, Ollama sigue calculando la caché como f16, es decir, más de lo estimado arriba.",
+  "pulpit (GNOME/KDE)": "escritorio (GNOME/KDE)",
+  "serwer (bez X-ów)": "servidor (sin X)"
 }

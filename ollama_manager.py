@@ -42,7 +42,7 @@ from PyQt6.QtWidgets import (
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.4.10"
+WERSJA = "0.4.11"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -829,10 +829,12 @@ _TYPOWE_WIELKOSCI_RAM = (8, 16, 32, 48, 64, 96, 128)
 # WHAT: kontekst i kwantyzacja cache przyjęte jako STAŁE w kalkulatorze - appka
 #       nie daje ich wybrać przy pobieraniu (kontekst ustawia się osobno w
 #       zakładce Zaawansowane; 16384 to tamtejsza zalecana wartość - patrz
-#       OLLAMA_ZALECANE). f16 to zachowanie Ollamy, dopóki ktoś świadomie nie
-#       włączy OLLAMA_FLASH_ATTENTION + kwantyzacji cache.
+#       OLLAMA_ZALECANE). q8_0 (nie f16) - bo profil OLLAMA_ZALECANE i tak
+#       włącza OLLAMA_FLASH_ATTENTION=1, a bez niego Ollama liczy cache jak
+#       f16 mimo wybranej kwantyzacji - stąd stałe ostrzeżenie o tym wymogu
+#       w _aktualizuj_szacowana_pamiec, dopóki KVQ != "f16".
 _KALKULATOR_CTX = 16384
-_KALKULATOR_KVQ = "f16"
+_KALKULATOR_KVQ = "q8_0"
 _KALKULATOR_D = 128  # wymiar głowicy - domyślny
 
 
@@ -1734,16 +1736,30 @@ class MainWindow(QMainWindow):
 
         # WHAT: ograniczony wybór (nie wolne pole) - wartość w bajtach zależy
         #       tylko od tego, czy na tym hoście działa środowisko graficzne.
+        #       "Pulpit" jako PIERWSZA pozycja (domyślnie wybrana w świeżo
+        #       zbudowanym formularzu) - appka ma GUI, więc najczęściej i tak
+        #       działa na maszynie z pulpitem, nie na czystym serwerze bez X.
+        #       Realny stan wczytany z override.conf (patrz
+        #       _odswiez_zakladke_zaawansowane) nadpisuje to i tak, jeśli
+        #       zmienna była już kiedyś świadomie ustawiona.
         # WHY:  serwer bez X (np. BC-250 jako czysty backend) nie potrzebuje
-        #       żadnej rezerwacji; stacja robocza z pulpitem (KDE/GNOME) dzieli
+        #       żadnej rezerwacji; stacja robocza z pulpitem (GNOME/KDE) dzieli
         #       tę samą pulę VRAM z kompozytorem, więc bez rezerwacji Ollama
-        #       mogłaby zająć całość i zdusić pulpit. 1 GB to bezpieczny,
-        #       orientacyjny punkt startu - do korekty przez pole "własne
-        #       parametry" niżej, jeśli potrzeba innej wartości w bajtach.
+        #       mogłaby zająć całość i zdusić pulpit. 500 MB (dokładnie 512 MiB)
+        #       to bezpieczny, orientacyjny punkt startu - sam kompozytor/sterownik
+        #       i tak rezerwuje coś jeszcze OSOBNO, poza kontrolą appki (patrz
+        #       rozmowa o OLLAMA_GPU_OVERHEAD vs. rezerwacja systemowa/sterownika) -
+        #       do korekty przez pole "własne parametry" niżej, jeśli 500 MB
+        #       okaże się za mało/za dużo w praktyce.
+        # WHY jawne "0" zamiast pustego: obie opcje muszą dawać się rozróżnić
+        #     po zapisie i przeładowaniu (tak jak Vulkan/iGPU wcześniej) - gdyby
+        #     "serwer" zapisywał puste (czyli w ogóle nie dopisywał klucza), nie
+        #     dałoby się potem odróżnić "świadomie wybrał serwer" od "nigdy nie
+        #     dotknął tego pola", i po każdym przeładowaniu wracałoby do "pulpit".
         self.combo_gpu_overhead = QComboBox()
         for etykieta, wartosc in [
-            (_("brak (serwer bez środowiska graficznego)"), ""),
-            (_("z pulpitem (KDE/GNOME) — 1 GB"), "1073741824"),
+            (_("pulpit (GNOME/KDE)"), "536870912"),
+            (_("serwer (bez X-ów)"), "0"),
         ]:
             self.combo_gpu_overhead.addItem(etykieta, wartosc)
         formularz.addRow("OLLAMA_GPU_OVERHEAD", self.combo_gpu_overhead)
@@ -2268,9 +2284,9 @@ class MainWindow(QMainWindow):
         ggml_vk_visible_devices = self.pole_ggml_vk_visible_devices.text().strip()
         if ggml_vk_visible_devices:
             zmienne["GGML_VK_VISIBLE_DEVICES"] = ggml_vk_visible_devices
-        gpu_overhead = self.combo_gpu_overhead.currentData()
-        if gpu_overhead:
-            zmienne["OLLAMA_GPU_OVERHEAD"] = gpu_overhead
+        # WHY: zawsze jawna wartość ("0" albo rozmiar w bajtach), nigdy pusta -
+        #      patrz WHY przy budowie combo_gpu_overhead w _zakladka_zaawansowane.
+        zmienne["OLLAMA_GPU_OVERHEAD"] = self.combo_gpu_overhead.currentData()
 
         for numer, linia in enumerate(self.pole_wlasne_zmienne.toPlainText().splitlines(), start=1):
             linia = linia.strip()
@@ -2507,6 +2523,11 @@ class MainWindow(QMainWindow):
                 "Uwaga: cache kontekstu przewyższa wagi modelu — rozważ mniejszy "
                 "kontekst lub kwantyzację cache."
             )
+        if _KALKULATOR_KVQ != "f16":
+            tresc += "\n" + _(
+                "Cache {kvq} działa TYLKO z OLLAMA_FLASH_ATTENTION=1 (zakładka Zaawansowane) - "
+                "bez tego Ollama i tak liczy cache jak f16, czyli więcej niż wyliczono wyżej."
+            ).format(kvq=_KALKULATOR_KVQ)
         tresc += "\n" + _(
             "Na APU / pamięci współdzielonej zarezerwuj pamięć dla systemu przez OLLAMA_GPU_OVERHEAD."
         )

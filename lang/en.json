@@ -157,7 +157,8 @@
   "Rozmiar na dysku": "Size on disk",
   "{gb:.1f} GB (załadowany)": "{gb:.1f} GB (loaded)",
   "~{gb:.1f} GB": "~{gb:.1f} GB",
-  "brak (serwer bez środowiska graficznego)": "none (server without a desktop environment)",
-  "z pulpitem (KDE/GNOME) — 1 GB": "with a desktop (KDE/GNOME) — 1 GB",
-  "Ile pamięci GPU (w bajtach) zarezerwować z dala od Ollamy, dla reszty systemu - istotne na APU z pamięcią współdzieloną z systemem RAM. Serwer bez środowiska graficznego zwykle nie potrzebuje rezerwacji; stacja robocza z pulpitem (KDE/GNOME) dzieli tę samą pulę VRAM z kompozytorem, więc bez rezerwacji Ollama mogłaby zająć całość.": "How much GPU memory (in bytes) to keep away from Ollama, for the rest of the system - relevant on APUs with memory shared with system RAM. A server without a desktop environment usually needs no reservation; a workstation with a desktop (KDE/GNOME) shares the same VRAM pool with the compositor, so without a reservation Ollama could take all of it."
+  "Ile pamięci GPU (w bajtach) zarezerwować z dala od Ollamy, dla reszty systemu - istotne na APU z pamięcią współdzieloną z systemem RAM. Serwer bez środowiska graficznego zwykle nie potrzebuje rezerwacji; stacja robocza z pulpitem (KDE/GNOME) dzieli tę samą pulę VRAM z kompozytorem, więc bez rezerwacji Ollama mogłaby zająć całość.": "How much GPU memory (in bytes) to keep away from Ollama, for the rest of the system - relevant on APUs with memory shared with system RAM. A server without a desktop environment usually needs no reservation; a workstation with a desktop (KDE/GNOME) shares the same VRAM pool with the compositor, so without a reservation Ollama could take all of it.",
+  "Cache {kvq} działa TYLKO z OLLAMA_FLASH_ATTENTION=1 (zakładka Zaawansowane) - bez tego Ollama i tak liczy cache jak f16, czyli więcej niż wyliczono wyżej.": "The {kvq} cache ONLY works with OLLAMA_FLASH_ATTENTION=1 (Advanced tab) - without it, Ollama still computes the cache as f16, i.e. more than estimated above.",
+  "pulpit (GNOME/KDE)": "desktop (GNOME/KDE)",
+  "serwer (bez X-ów)": "server (no X)"
 }

@@ -157,7 +157,8 @@
   "Rozmiar na dysku": "Dimensione su disco",
   "{gb:.1f} GB (załadowany)": "{gb:.1f} GB (caricato)",
   "~{gb:.1f} GB": "~{gb:.1f} GB",
-  "brak (serwer bez środowiska graficznego)": "nessuna (server senza ambiente desktop)",
-  "z pulpitem (KDE/GNOME) — 1 GB": "con desktop (KDE/GNOME) — 1 GB",
-  "Ile pamięci GPU (w bajtach) zarezerwować z dala od Ollamy, dla reszty systemu - istotne na APU z pamięcią współdzieloną z systemem RAM. Serwer bez środowiska graficznego zwykle nie potrzebuje rezerwacji; stacja robocza z pulpitem (KDE/GNOME) dzieli tę samą pulę VRAM z kompozytorem, więc bez rezerwacji Ollama mogłaby zająć całość.": "Quanta memoria GPU (in byte) tenere lontana da Ollama, per il resto del sistema - rilevante sulle APU con memoria condivisa con la RAM di sistema. Un server senza ambiente desktop di solito non necessita di riserva; una workstation con desktop (KDE/GNOME) condivide lo stesso pool di VRAM con il compositor, quindi senza riserva Ollama potrebbe occupare tutto."
+  "Ile pamięci GPU (w bajtach) zarezerwować z dala od Ollamy, dla reszty systemu - istotne na APU z pamięcią współdzieloną z systemem RAM. Serwer bez środowiska graficznego zwykle nie potrzebuje rezerwacji; stacja robocza z pulpitem (KDE/GNOME) dzieli tę samą pulę VRAM z kompozytorem, więc bez rezerwacji Ollama mogłaby zająć całość.": "Quanta memoria GPU (in byte) tenere lontana da Ollama, per il resto del sistema - rilevante sulle APU con memoria condivisa con la RAM di sistema. Un server senza ambiente desktop di solito non necessita di riserva; una workstation con desktop (KDE/GNOME) condivide lo stesso pool di VRAM con il compositor, quindi senza riserva Ollama potrebbe occupare tutto.",
+  "Cache {kvq} działa TYLKO z OLLAMA_FLASH_ATTENTION=1 (zakładka Zaawansowane) - bez tego Ollama i tak liczy cache jak f16, czyli więcej niż wyliczono wyżej.": "La cache {kvq} funziona SOLO con OLLAMA_FLASH_ATTENTION=1 (scheda Avanzate) - senza, Ollama calcola comunque la cache come f16, quindi più di quanto stimato sopra.",
+  "pulpit (GNOME/KDE)": "desktop (GNOME/KDE)",
+  "serwer (bez X-ów)": "server (senza X)"
 }

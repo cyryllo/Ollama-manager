@@ -157,7 +157,8 @@
   "Rozmiar na dysku": "Taille sur le disque",
   "{gb:.1f} GB (załadowany)": "{gb:.1f} GB (chargé)",
   "~{gb:.1f} GB": "~{gb:.1f} GB",
-  "brak (serwer bez środowiska graficznego)": "aucune (serveur sans environnement de bureau)",
-  "z pulpitem (KDE/GNOME) — 1 GB": "avec bureau (KDE/GNOME) — 1 Go",
-  "Ile pamięci GPU (w bajtach) zarezerwować z dala od Ollamy, dla reszty systemu - istotne na APU z pamięcią współdzieloną z systemem RAM. Serwer bez środowiska graficznego zwykle nie potrzebuje rezerwacji; stacja robocza z pulpitem (KDE/GNOME) dzieli tę samą pulę VRAM z kompozytorem, więc bez rezerwacji Ollama mogłaby zająć całość.": "Quelle quantité de mémoire GPU (en octets) réserver à l'écart d'Ollama, pour le reste du système - pertinent sur les APU dont la mémoire est partagée avec la RAM système. Un serveur sans environnement de bureau n'a généralement pas besoin de réservation ; une station de travail avec bureau (KDE/GNOME) partage le même pool de VRAM avec le compositeur, donc sans réservation Ollama pourrait tout occuper."
+  "Ile pamięci GPU (w bajtach) zarezerwować z dala od Ollamy, dla reszty systemu - istotne na APU z pamięcią współdzieloną z systemem RAM. Serwer bez środowiska graficznego zwykle nie potrzebuje rezerwacji; stacja robocza z pulpitem (KDE/GNOME) dzieli tę samą pulę VRAM z kompozytorem, więc bez rezerwacji Ollama mogłaby zająć całość.": "Quelle quantité de mémoire GPU (en octets) réserver à l'écart d'Ollama, pour le reste du système - pertinent sur les APU dont la mémoire est partagée avec la RAM système. Un serveur sans environnement de bureau n'a généralement pas besoin de réservation ; une station de travail avec bureau (KDE/GNOME) partage le même pool de VRAM avec le compositeur, donc sans réservation Ollama pourrait tout occuper.",
+  "Cache {kvq} działa TYLKO z OLLAMA_FLASH_ATTENTION=1 (zakładka Zaawansowane) - bez tego Ollama i tak liczy cache jak f16, czyli więcej niż wyliczono wyżej.": "Le cache {kvq} ne fonctionne QU'AVEC OLLAMA_FLASH_ATTENTION=1 (onglet Avancé) - sans cela, Ollama calcule quand même le cache en f16, donc plus que ce qui est estimé ci-dessus.",
+  "pulpit (GNOME/KDE)": "bureau (GNOME/KDE)",
+  "serwer (bez X-ów)": "serveur (sans X)"
 }
