@@ -42,7 +42,7 @@ from PyQt6.QtWidgets import (
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.4.14"
+WERSJA = "0.4.15"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -2534,18 +2534,23 @@ class MainWindow(QMainWindow):
         # WHAT: podmienia podpowiedzi w polu "Rozmiar" na te NAPRAWDĘ dostępne
         #       dla wybranego modelu (ROZMIARY_WG_MODELU), albo ogólny przekrój
         #       (ROZMIARY_MODELI_OGOLNE), jeśli model nie jest na tej liście.
-        # WHY:  BUG naprawiony - wcześniej appka pokazywała TE SAME podpowiedzi
-        #       (1b-70b) dla każdego modelu, więc sugerowała rozmiary, których
-        #       dany model wcale nie ma (np. Ornith ma tylko 9b/35b). Nie
-        #       czyścimy przy tym tego, co user już wpisał ręcznie do pola -
-        #       zmieniają się tylko podpowiedzi w rozwijanej liście.
+        # WHY:  BUG naprawiony (dwukrotnie) - najpierw appka pokazywała TE SAME
+        #       podpowiedzi (1b-70b) dla każdego modelu (np. Ornith ma tylko
+        #       9b/35b). Potem, przy próbie "nie kasować tego, co user wpisał",
+        #       zostawialiśmy STARY tekst z POPRZEDNIEGO modelu w polu nawet
+        #       po zmianie modelu - więc np. "8b" z Llamy zostawało widoczne
+        #       (i wliczane do szacowania pamięci) po przełączeniu na Phi-4,
+        #       mimo że to zupełnie inny model. Teraz zostaje tylko, jeśli
+        #       jest NAPRAWDĘ poprawnym rozmiarem także dla nowego modelu -
+        #       w przeciwnym razie pole się czyści, żeby nie sugerować
+        #       nieaktualnej wartości.
         model = self.combo_modele.currentText().strip()
         rozmiary = ROZMIARY_WG_MODELU.get(model, ROZMIARY_MODELI_OGOLNE)
-        wpisany_tekst = self.combo_rozmiar.currentText()
+        wpisany_tekst = self.combo_rozmiar.currentText().strip()
         self.combo_rozmiar.blockSignals(True)
         self.combo_rozmiar.clear()
         self.combo_rozmiar.addItems(rozmiary)
-        self.combo_rozmiar.setCurrentText(wpisany_tekst)
+        self.combo_rozmiar.setCurrentText(wpisany_tekst if wpisany_tekst in rozmiary else "")
         self.combo_rozmiar.blockSignals(False)
 
     def _aktualizuj_liste_kwantyzacji(self):
