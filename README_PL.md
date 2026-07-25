@@ -16,7 +16,8 @@ lokalnie, w Twoim LAN.
 ## Wymagania
 
 - Python 3 + **PyQt6**, **requests**
-- **systemd** + **polkit** (`pkexec`) — standard na KDE/Debian
+- **systemd** + **polkit** (`pkexec`) — standard na KDE/Debian; `install.sh` proponuje instalację
+  `pkexec` przez `apt`, jeśli go brakuje (potrzebne do każdej akcji wymagającej uprawnień admina)
 - **curl** — używany przez własne przyciski instalacyjne appki (Ollama, oraz uv dla Open WebUI/LiteLLM);
   `install.sh` proponuje jego instalację przez `apt`, jeśli go brakuje
 - Ollama (jeśli jej nie masz, aplikacja sama ją zainstaluje jednym przyciskiem)
@@ -69,8 +70,11 @@ python3 ollama_manager.py
   VRAM dla każdego — + usuwanie
 - Pobieranie nowych modeli z podpowiedziami popularnych (Llama, Gemma, Mistral, Phi, DeepSeek,
   Qwen, GPT-OSS, Ornith...) i paskiem postępu
-- Wybór rozmiaru i kwantyzacji (domyślna/Q8_0/pełna F16) przy pobieraniu — lista rozmiarów jest
-  dopasowana do wybranego modelu, zweryfikowana na ollama.com/library, nie jedna ogólna lista dla wszystkich
+- Wybór rozmiaru i kwantyzacji (domyślna/Q8_0/pełna F16) przy pobieraniu — obie listy są
+  dopasowane do wybranego modelu (a kwantyzacja dodatkowo do rozmiaru), zweryfikowane na
+  ollama.com/library; Q8_0/F16 pokazują się tylko tam, gdzie potwierdzono, że taki dokładny
+  tag istnieje, bo większość modeli wymaga dodatkowego segmentu w tagu (np. "instruct"),
+  nie samego rozmiaru i kwantyzacji
 - Bieżące, orientacyjne wyliczenie zużycia pamięci (wagi + KV cache + bufory, plus zalecany RAM)
   przy wyborze rozmiaru/kwantyzacji
 - Podgląd modeli aktualnie załadowanych do pamięci (VRAM)

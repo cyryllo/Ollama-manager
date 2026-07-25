@@ -9,9 +9,9 @@
 #        installed version with an older one. A separate flag removes the app.
 #  WHY:  everything lands in $HOME - no sudo, no touching the system beyond
 #        one .desktop file, per the "no root where avoidable" principle. The
-#        one exception: two system packages (curl, python3-pip) that need
-#        apt/root if missing - offered with an explicit, confirmed prompt
-#        each time, never installed silently.
+#        one exception: three system packages (curl, pkexec, python3-pip)
+#        that need apt/root if missing - offered with an explicit, confirmed
+#        prompt each time, never installed silently.
 #
 #  Run:      ./install.sh
 #  Uninstall: ./install.sh --uninstall
@@ -170,6 +170,17 @@ command -v curl >/dev/null 2>&1 || {
     _confirm_apt_install curl \
         "curl is not installed - the app needs it for its own install buttons (Ollama, and uv for Open WebUI/LiteLLM)." \
         || echo "Skipping curl - those in-app install buttons won't work until it's installed."
+}
+
+# WHY: not every system has pkexec by default either, but the whole app relies
+#      on it for every privileged action (service start/stop/autostart, the
+#      Advanced tab's env vars) - it's its own package on modern Debian/Ubuntu
+#      (polkit was split into polkitd/pkexec; policykit-1 is now just a
+#      transitional metapackage), so plain "polkit" wouldn't be enough.
+command -v pkexec >/dev/null 2>&1 || {
+    _confirm_apt_install pkexec \
+        "pkexec is not installed - the app needs it for every action that requires admin rights (start/stop the Ollama service, autostart, Advanced tab settings)." \
+        || echo "Skipping pkexec - those actions won't work until it's installed."
 }
 
 install_python_deps

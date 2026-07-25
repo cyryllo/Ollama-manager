@@ -17,7 +17,8 @@ everything runs on your LAN.
 ## Requirements
 
 - Python 3 + **PyQt6**, **requests**
-- **systemd** + **polkit** (`pkexec`) — standard on KDE/Debian
+- **systemd** + **polkit** (`pkexec`) — standard on KDE/Debian; `install.sh` offers to install
+  `pkexec` via `apt` if it's missing (needed for every action requiring admin rights)
 - **curl** — used by the app's own install buttons (Ollama, and uv for Open WebUI/LiteLLM);
   `install.sh` offers to install it via `apt` if it's missing
 - Ollama (if you don't have it, the app installs it with one click)
@@ -69,8 +70,10 @@ python3 ollama_manager.py
 - Table of installed models — name, disk size, and an estimated/live VRAM column each — + deletion
 - Downloading new models with suggestions of popular ones (Llama, Gemma, Mistral, Phi, DeepSeek,
   Qwen, GPT-OSS, Ornith...) and a progress bar
-- Size and quantization picker (default/Q8_0/full F16) when pulling — the size list is specific
-  to the selected model, verified against ollama.com/library, not a generic one-size-fits-all list
+- Size and quantization picker (default/Q8_0/full F16) when pulling — both lists are specific to
+  the selected model (and size, for quantization), verified against ollama.com/library; Q8_0/F16
+  only show up where that exact tag was confirmed to exist, since most models need an extra
+  segment in the tag (e.g. "instruct") that isn't just size+quantization
 - Live, approximate memory-usage estimate (weights + KV cache + buffers, then a recommended-RAM
   figure) as you pick a size/quantization
 - Preview of models currently loaded into memory (VRAM)
