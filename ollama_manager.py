@@ -42,7 +42,7 @@ from PyQt6.QtWidgets import (
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.4.11"
+WERSJA = "0.4.12"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -1488,6 +1488,10 @@ class MainWindow(QMainWindow):
         pasek_pull = QHBoxLayout()
         self.combo_modele = QComboBox()
         self.combo_modele.setEditable(True)  # WHY: pozwól wpisać też dowolną nazwę
+        # WHY: domyślne maxVisibleItems (10) obcinało listę POLECANE_MODELE
+        #      (13 pozycji) i wymuszało przewijanie rozwiniętej listy - z
+        #      zapasem, żeby kolejne dopisane modele też mieściły się od razu.
+        self.combo_modele.setMaxVisibleItems(20)
         self.combo_modele.addItems(POLECANE_MODELE)
         # WHY: podpowiedzi na liście to tylko wybór - pełna baza jest na ollama.com,
         #      placeholder przypomina o tym, gdy pole jest puste.
@@ -1510,6 +1514,9 @@ class MainWindow(QMainWindow):
         pasek_rozmiar.addWidget(QLabel(_("Rozmiar:")))
         self.combo_rozmiar = QComboBox()
         self.combo_rozmiar.setEditable(True)
+        # WHY: ROZMIARY_MODELI_OGOLNE (fallback dla modeli spoza listy) ma 15
+        #      pozycji - tyle samo z zapasem, żeby też nie wymuszało przewijania.
+        self.combo_rozmiar.setMaxVisibleItems(20)
         self.combo_rozmiar.setCurrentText("")
         self.combo_rozmiar.lineEdit().setPlaceholderText(_("opcjonalnie, np. 8b"))
         pasek_rozmiar.addWidget(self.combo_rozmiar, 1)
