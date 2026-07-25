@@ -18,6 +18,7 @@
 import sys
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -30,7 +31,7 @@ import requests  # WHY: czytelniejsze od urllib przy strumieniowaniu /api/pull
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QUrl, QSettings
 from PyQt6.QtGui import QIcon, QDesktopServices
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QPushButton, QListWidget, QListWidgetItem, QProgressBar, QTabWidget,
     QGroupBox,
     QPlainTextEdit, QComboBox, QMessageBox, QCheckBox,
@@ -41,7 +42,7 @@ from PyQt6.QtWidgets import (
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.4.7"
+WERSJA = "0.4.8"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -78,7 +79,38 @@ POLECANE_MODELE = [
     "qwen2.5-coder:14b",
     "qwen2.5-coder:1.5b",
     "nomic-embed-text",  # embeddingi (RAG, wyszukiwanie semantyczne)
+    "gpt-oss:20b",            # OpenAI - open-weight, reasoning/agentowy, ~16GB RAM
+    "deepseek-coder-v2:16b",  # DeepSeek - MoE do kodu, tool-calling, ~8.9GB
+    "ornith:9b",              # agent kodujący, MIT, kontekst 256K, ~5.6GB
 ]
+
+# WHAT: podpowiedzi do pola "Rozmiar" przy pobieraniu (patrz karta "Pobierz nowy
+#       model") - typowe rozmiary spotykane w rodzinach modeli z POLECANE_MODELE
+#       wyżej, plus większe warianty (do 70B). Pole jest edytowalne - dowolny inny
+#       rozmiar da się wpisać ręcznie, to tylko podpowiedzi.
+ROZMIARY_MODELI = [
+    "1b", "1.5b", "3b", "4b", "7b", "8b", "9b", "12b", "14b",
+    "20b", "27b", "30b", "32b", "34b", "70b",
+]
+
+# WHAT: profil startowy dla przycisku "Zastosuj zalecane wartości" w zakładce
+#       Zaawansowane - wypełnia formularz, NIC nie zapisuje samo z siebie.
+# WHY:  dobrane pod BC-250 (Vulkan+iGPU włączone, kontekst 16k, keep_alive 30m,
+#       jeden model/zapytanie naraz, q8_0 dla mniejszego zużycia VRAM) - to
+#       tylko punkt startu do przejrzenia i ewentualnej korekty przed "Zapisz",
+#       appka nigdy nie wstrzykuje tych wartości automatycznie/po cichu.
+OLLAMA_ZALECANE = {
+    "OLLAMA_KEEP_ALIVE": "30m",
+    "OLLAMA_CONTEXT_LENGTH": "16384",
+    "OLLAMA_MAX_LOADED_MODELS": "1",
+    "OLLAMA_NUM_PARALLEL": "1",
+    "OLLAMA_FLASH_ATTENTION": "1",
+    "OLLAMA_KV_CACHE_TYPE": "q8_0",
+    "OLLAMA_VULKAN": "1",
+    "OLLAMA_IGPU_ENABLE": "1",
+    "OLLAMA_HOST": "",
+    "GGML_VK_VISIBLE_DEVICES": "0",
+}
 
 
 # =============================================================================
@@ -222,7 +254,7 @@ def _usluga_override_sciezka():
 def _usluga_env_wszystkie():
     # WHAT: czyta WSZYSTKIE zmienne środowiskowe zapisane w override.conf.
     # WHY:  sam ODCZYT pliku w /etc nie wymaga roota - tylko jego ZMIANA (patrz
-    #       usluga_ustaw_zmienna). BUG naprawiony: poprzednia wersja zakładała,
+    #       usluga_zapisz_env). BUG naprawiony: poprzednia wersja zakładała,
     #       że plik ZAWSZE ma dokładnie nasz własny format (jedna zmienna na
     #       linię, w cudzysłowach) - ale systemd.exec(5) dopuszcza też WIELE par
     #       KEY=VALUE oddzielonych spacją w jednej linii Environment=, a cudzysłów
@@ -254,21 +286,18 @@ def _usluga_env_wszystkie():
     return zmienne
 
 
-def usluga_ustaw_zmienna(nazwa, wartosc):
-    # WHAT: dopisuje/zmienia JEDNĄ zmienną środowiskową usługi Ollama w
-    #       override.conf (zachowując resztę już ustawionych) i restartuje usługę.
-    #       Pusta wartość = usuń zmienną (wróć do domyślnego zachowania Ollamy).
-    # WHY:  override może mieć wiele linii Environment= (KEEP_ALIVE,
-    #       CONTEXT_LENGTH, ...) - nadpisanie całego pliku przy KAŻDEJ zmianie
-    #       usunęłoby wcześniej ustawione zmienne. Gotowa treść pliku (z
-    #       wartością wpisaną przez użytkownika) leci na STDIN procesu roota,
-    #       nie jako argument powłoki - żaden wpisany tekst nie ma szansy
-    #       dotknąć parsera 'sh', bo w ogóle nie trafia do wiersza poleceń.
-    zmienne = _usluga_env_wszystkie()
-    if wartosc:
-        zmienne[nazwa] = wartosc
-    else:
-        zmienne.pop(nazwa, None)
+def usluga_zapisz_env(zmienne):
+    # WHAT: nadpisuje CAŁY override.conf zadanym słownikiem zmiennych (jeden
+    #       zapis, jedna zmiana pliku) i restartuje usługę.
+    # WHY:  zakładka "Zaawansowane" ma jeden przycisk "Zapisz" dla wszystkich
+    #       9 zmiennych + własnych parametrów naraz, zamiast osobnego zapisu i
+    #       restartu na każde pole (jak w starszych wersjach) - wywołujący
+    #       (zapisz_zaawansowane w MainWindow) sam składa kompletny słownik
+    #       "co ma się finalnie znaleźć w pliku"; ta funkcja niczego nie scala
+    #       z poprzednią zawartością - zrobiła to już strona wywołująca. Gotowa
+    #       treść pliku leci na STDIN procesu roota, nie jako argument powłoki -
+    #       żaden wpisany tekst nie ma szansy dotknąć parsera 'sh', bo w ogóle
+    #       nie trafia do wiersza poleceń.
     tresc = "[Service]\n" + "".join(f'Environment="{k}={v}"\n' for k, v in zmienne.items())
     skrypt = (
         'mkdir -p "$(dirname "$1")" && cat > "$1" && '
@@ -692,6 +721,66 @@ def litellm_autostart(wlacz, serwery):
         _systemctl_user(["disable", "--now", "litellm.service"])
 
 
+def _zbuduj_tag_modelu(model, rozmiar, kwantyzacja):
+    # WHAT: dokleja rozmiar i/albo wariant kwantyzacji do tagu modelu przed
+    #       pobraniem, oddzielone myślnikiem (konwencja Ollamy - np. "8b-q8_0").
+    # WHY:  jeśli nazwa modelu ma już tag (po dwukropku, np. wybrany wprost z
+    #       listy podpowiedzi "llama3.1:8b"), doklejamy do NIEGO; jeśli nazwa
+    #       to sam człon rodziny bez tagu (czyli wskazywałaby "latest"),
+    #       rozmiar/kwantyzacja stają się całym tagiem. Nie każdy model
+    #       publikuje każdy rozmiar/wariant - to tylko doklejenie tekstu,
+    #       appka NIE sprawdza z góry, czy taki tag istnieje w rejestrze
+    #       Ollamy (błąd wyjdzie dopiero przy pobieraniu, patrz PullWorker).
+    model = model.strip()
+    if ":" in model:
+        repo, czesci_tagu = model.split(":", 1)
+        czesci_tagu = [czesci_tagu]
+    else:
+        repo, czesci_tagu = model, []
+    if rozmiar:
+        czesci_tagu.append(rozmiar.strip())
+    if kwantyzacja:
+        czesci_tagu.append(kwantyzacja)
+    if not czesci_tagu:
+        return repo
+    return f"{repo}:" + "-".join(czesci_tagu)
+
+
+def _parsuj_rozmiar_parametrow(tekst):
+    # WHAT: wyciąga liczbę parametrów (w miliardach) z tekstu typu "8b", "1.5B",
+    #       "70b-instruct" albo "llama3.1:8b" (bierze pierwsze dopasowanie "<liczba>b").
+    # WHY:  potrzebne do orientacyjnego szacowania zużycia pamięci - działa
+    #       zarówno na polu "Rozmiar", jak i na samej nazwie modelu (fallback,
+    #       gdy ktoś wpisał rozmiar wprost do nazwy zamiast do osobnego pola).
+    dopasowanie = re.search(r"(\d+(?:\.\d+)?)\s*[bB](?![a-zA-Z])", tekst)
+    if not dopasowanie:
+        return None
+    return float(dopasowanie.group(1))
+
+
+# WHAT: przybliżone bajty na parametr wg wariantu kwantyzacji - powszechnie
+#       używane w społeczności zaokrąglenia (nie liczą narzutu tokenizera/
+#       embeddingów, więc to raczej dolna granica).
+_BAJTY_NA_PARAMETR = {
+    "": 0.6,       # domyślna (Ollama zwykle ściąga Q4_0/Q4_K_M)
+    "q8_0": 1.0,
+    "fp16": 2.0,
+}
+
+
+def _oszacuj_pamiec_gb(miliardy_parametrow, kwantyzacja):
+    # WHAT: (same wagi modelu w GB, zalecane minimum z zapasem na kontekst).
+    # WHY:  dokładne wyliczenie bufora na kontekst (KV cache) wymagałoby
+    #       znajomości architektury KONKRETNEGO modelu (liczba warstw, głowic
+    #       KV, czy używa GQA) - appka jej nie zna, dopóki modelu nie pobierze.
+    #       Zamiast udawać precyzję, dajemy uczciwe przybliżenie: dokładne
+    #       wagi + stały narzut 30% jako "zalecane minimum", jawnie opisany
+    #       w UI jako orientacyjny (patrz _aktualizuj_szacowana_pamiec).
+    bajty_na_parametr = _BAJTY_NA_PARAMETR.get(kwantyzacja, _BAJTY_NA_PARAMETR[""])
+    wagi_gb = miliardy_parametrow * bajty_na_parametr
+    return wagi_gb, wagi_gb * 1.3
+
+
 # =============================================================================
 #  Warstwa sieci - odseparowana od GUI
 # =============================================================================
@@ -1052,13 +1141,20 @@ class MainWindow(QMainWindow):
 
     # --- Budowa interfejsu ---
     def _buduj_ui(self):
-        # WHAT: pasek serwera + pasek statystyk na górze, pod nim 4 zakładki
-        #       (Usługi / Modele / Agregator modeli / Zaawansowane), dziennik
-        #       na dole na całą szerokość.
+        # WHAT: pasek serwera + pasek statystyk na górze, pod nim 5 zakładek
+        #       (Usługi / Modele / Agregator modeli / Zaawansowane / Pomoc),
+        #       dziennik na dole na całą szerokość.
         # WHY:  finalny układ po trzech podejściach w Claude Design - zakładki
         #       trzymają wysokość okna w ryzach (jedna zakładka = jeden ekran),
         #       a pasek statystyk daje podgląd stanu bez klikania w ogóle.
         #       Kolory/ramki są natywne (Qt/Breeze, jasny/ciemny wg motywu systemu).
+        # WHY self._zaawansowane_wczytane: formularz w zakładce "Zaawansowane"
+        #      ma teraz JEDEN przycisk "Zapisz" zamiast osobnego zapisu na
+        #      pole - żeby cykliczne odświeżanie co 10 s nie kasowało
+        #      niezapisanych zmian w trakcie edycji, pola wypełniamy z
+        #      rzeczywistego stanu TYLKO raz po (prze)budowaniu UI i zaraz po
+        #      zapisaniu (patrz _odswiez_zakladke_zaawansowane/zapisz_zaawansowane).
+        self._zaawansowane_wczytane = False
         centralny = QWidget()
         self.setCentralWidget(centralny)
         layout = QVBoxLayout(centralny)
@@ -1104,6 +1200,7 @@ class MainWindow(QMainWindow):
         zakladki.addTab(self._zakladka_modele_lokalne(), _("Modele"))
         zakladki.addTab(self._zakladka_agregator(), _("Agregator modeli"))
         zakladki.addTab(self._zakladka_zaawansowane(), _("Zaawansowane"))
+        zakladki.addTab(self._zakladka_pomoc(), _("Pomoc"))
         layout.addWidget(zakladki, 1)
 
         # === Dziennik - na dole, pod zakładkami =========================
@@ -1150,84 +1247,6 @@ class MainWindow(QMainWindow):
         if widget_z_prawej is not None:
             pasek.addWidget(widget_z_prawej)
         return pasek
-
-    def _wiersz_ollama_env(self, tytul, opis, placeholder, metoda_zastosuj):
-        # WHAT: wspólny układ "tytuł + krótki opis + wąskie pole + Zastosuj +
-        #       aktualna wartość" dla jednej zmiennej środowiskowej Ollamy.
-        # WHY:  sześć zmiennych w zakładce "Zaawansowane", ten sam wzorzec -
-        #       jedna funkcja zamiast sześciu kopii tego samego układu.
-        uklad = QVBoxLayout()
-        naglowek = QLabel(tytul)
-        czcionka = naglowek.font()
-        czcionka.setBold(True)
-        naglowek.setFont(czcionka)
-        uklad.addWidget(naglowek)
-        lbl_opis = QLabel(opis)
-        lbl_opis.setWordWrap(True)
-        uklad.addWidget(lbl_opis)
-        wiersz = QHBoxLayout()
-        pole = QLineEdit()
-        pole.setPlaceholderText(placeholder)
-        pole.setMaximumWidth(120)
-        przycisk = QPushButton(_("Zastosuj"))
-        przycisk.clicked.connect(metoda_zastosuj)
-        wiersz.addWidget(pole)
-        wiersz.addWidget(przycisk)
-        wiersz.addStretch(1)
-        uklad.addLayout(wiersz)
-        lbl_aktualnie = QLabel(_("aktualnie: sprawdzam..."))
-        uklad.addWidget(lbl_aktualnie)
-        return uklad, pole, przycisk, lbl_aktualnie
-
-    def _wiersz_ollama_env_combo(self, tytul, opis, opcje, metoda_zastosuj):
-        # WHAT: to samo co _wiersz_ollama_env, tylko z QComboBox zamiast pola
-        #       tekstowego - dla zmiennych o skończonym zbiorze sensownych wartości.
-        uklad = QVBoxLayout()
-        naglowek = QLabel(tytul)
-        czcionka = naglowek.font()
-        czcionka.setBold(True)
-        naglowek.setFont(czcionka)
-        uklad.addWidget(naglowek)
-        lbl_opis = QLabel(opis)
-        lbl_opis.setWordWrap(True)
-        uklad.addWidget(lbl_opis)
-        wiersz = QHBoxLayout()
-        combo = QComboBox()
-        for etykieta, wartosc in opcje:
-            combo.addItem(etykieta, wartosc)
-        przycisk = QPushButton(_("Zastosuj"))
-        przycisk.clicked.connect(metoda_zastosuj)
-        wiersz.addWidget(combo)
-        wiersz.addWidget(przycisk)
-        wiersz.addStretch(1)
-        uklad.addLayout(wiersz)
-        lbl_aktualnie = QLabel(_("aktualnie: sprawdzam..."))
-        uklad.addWidget(lbl_aktualnie)
-        return uklad, combo, przycisk, lbl_aktualnie
-
-    def _wiersz_ollama_env_checkbox(self, tytul, opis, etykieta_checkbox, metoda_zastosuj):
-        # WHAT: to samo co _wiersz_ollama_env, tylko z QCheckBox - dla zmiennych
-        #       0/1 (włącz/wyłącz), gdzie to prostsze niż rozwijana lista.
-        uklad = QVBoxLayout()
-        naglowek = QLabel(tytul)
-        czcionka = naglowek.font()
-        czcionka.setBold(True)
-        naglowek.setFont(czcionka)
-        uklad.addWidget(naglowek)
-        lbl_opis = QLabel(opis)
-        lbl_opis.setWordWrap(True)
-        uklad.addWidget(lbl_opis)
-        wiersz = QHBoxLayout()
-        checkbox = QCheckBox(etykieta_checkbox)
-        przycisk = QPushButton(_("Zastosuj"))
-        przycisk.clicked.connect(metoda_zastosuj)
-        wiersz.addWidget(checkbox)
-        wiersz.addWidget(przycisk)
-        wiersz.addStretch(1)
-        uklad.addLayout(wiersz)
-        lbl_aktualnie = QLabel(_("aktualnie: sprawdzam..."))
-        uklad.addWidget(lbl_aktualnie)
-        return uklad, checkbox, przycisk, lbl_aktualnie
 
     def _zakladka_uslugi(self):
         # WHAT: dwie kolumny - lewa: Sterowanie i Open WebUI jedna pod drugą
@@ -1324,12 +1343,63 @@ class MainWindow(QMainWindow):
         pasek_pull.addWidget(self.btn_pull)
         uk_pobierz.addLayout(pasek_pull)
 
+        # WHAT: opcjonalny rozmiar (parametry) do doklejenia do nazwy modelu -
+        #       osobne pole zamiast pisania "rodzina:rozmiar" ręcznie za każdym
+        #       razem. Puste = bez zmian (nazwa z pola wyżej idzie 1:1).
+        # WHY:  appka NIE trzyma sztywnej listy "który model ma jakie rozmiary" -
+        #       to wymagałoby ręcznego utrzymywania osobnej mapy dla każdej
+        #       rodziny i i tak by się starzało przy nowych wersjach modeli na
+        #       ollama.com. Wolne, edytowalne pole z podpowiedziami (patrz
+        #       ROZMIARY_MODELI) jest prostsze i zawsze aktualne.
+        pasek_rozmiar = QHBoxLayout()
+        pasek_rozmiar.addWidget(QLabel(_("Rozmiar:")))
+        self.combo_rozmiar = QComboBox()
+        self.combo_rozmiar.setEditable(True)
+        self.combo_rozmiar.addItems(ROZMIARY_MODELI)
+        self.combo_rozmiar.setCurrentText("")
+        self.combo_rozmiar.lineEdit().setPlaceholderText(_("opcjonalnie, np. 8b"))
+        pasek_rozmiar.addWidget(self.combo_rozmiar, 1)
+        uk_pobierz.addLayout(pasek_rozmiar)
+
+        # WHAT: wybór kwantyzacji do pobrania - Ollama bez dopisku zwykle
+        #       ściąga Q4_0, appka dokleja wariant do tagu (patrz _zbuduj_tag_modelu).
+        # WHY:  Q8_0/F16 to większe pliki, ale mniejsza strata jakości - warto
+        #       dać wybór z okna, zamiast zmuszać do ręcznego dopisywania tagu.
+        pasek_kwantyzacja = QHBoxLayout()
+        pasek_kwantyzacja.addWidget(QLabel(_("Kwantyzacja:")))
+        self.combo_kwantyzacja = QComboBox()
+        for etykieta, wartosc in [
+            (_("domyślna (zwykle Q4_0)"), ""),
+            ("Q8_0", "q8_0"),
+            (_("F16 (pełna precyzja)"), "fp16"),
+        ]:
+            self.combo_kwantyzacja.addItem(etykieta, wartosc)
+        pasek_kwantyzacja.addWidget(self.combo_kwantyzacja, 1)
+        uk_pobierz.addLayout(pasek_kwantyzacja)
+
+        # WHAT: orientacyjne zużycie pamięci dla aktualnie wpisanego rozmiaru
+        #       + kwantyzacji - aktualizowane na żywo (patrz _aktualizuj_szacowana_pamiec).
+        # WHY:  jawnie podpisane jako przybliżenie (patrz _oszacuj_pamiec_gb) -
+        #       appka nie zna architektury modelu przed pobraniem, więc nie
+        #       udaje precyzji, której nie ma.
+        self.lbl_szacowana_pamiec = QLabel("")
+        self.lbl_szacowana_pamiec.setWordWrap(True)
+        uk_pobierz.addWidget(self.lbl_szacowana_pamiec)
+        self.combo_modele.currentTextChanged.connect(self._aktualizuj_szacowana_pamiec)
+        self.combo_rozmiar.currentTextChanged.connect(self._aktualizuj_szacowana_pamiec)
+        self.combo_kwantyzacja.currentIndexChanged.connect(self._aktualizuj_szacowana_pamiec)
+        self._aktualizuj_szacowana_pamiec()
+
         # WHAT: krótkie wyjaśnienie, skąd wziąć nazwę modelu do pobrania.
         # WHY:  powyższa lista to tylko garść popularnych modeli - reszta jest
-        #       na ollama.com/library, skąd można skopiować dowolną nazwę.
+        #       na ollama.com/library, skąd można skopiować dowolną nazwę. Nie
+        #       każdy model ma opublikowany każdy wariant kwantyzacji - jeśli
+        #       wybranego nie ma, pobieranie zakończy się błędem z Ollamy
+        #       (manifest nieznaleziony) - warto sprawdzić dostępne tagi na stronie.
         lbl_link = QLabel(
-            _('Sprawdź dostępne modele na <a href="https://ollama.com/library">'
-              "ollama.com/library</a>, wpisz nazwę w polu powyżej i kliknij Pobierz.")
+            _('Sprawdź dostępne modele (i warianty kwantyzacji) na '
+              '<a href="https://ollama.com/library">ollama.com/library</a>, '
+              "wpisz nazwę w polu powyżej i kliknij Pobierz.")
         )
         lbl_link.setWordWrap(True)
         lbl_link.setOpenExternalLinks(True)
@@ -1429,111 +1499,92 @@ class MainWindow(QMainWindow):
         return strona
 
     def _zakladka_zaawansowane(self):
-        # WHAT: zmienne środowiskowe usługi Ollama, które nie mieszczą się w
-        #       zwykłej karcie "Ollama" bez zamiany jej w ścianę tekstu.
+        # WHAT: zmienne środowiskowe usługi Ollama - kompaktowy formularz
+        #       "nazwa + pole/checkbox", bez opisów (te są w osobnej zakładce
+        #       "Pomoc", patrz _zakladka_pomoc) i bez osobnego zapisu na każde
+        #       pole - jeden przycisk "Zapisz" na dole stosuje WSZYSTKO naraz.
         # WHY:  osobna zakładka zamiast kolejnych pól w zakładce "Usługi" -
         #       to ustawienia dla kogoś, kto świadomie tuninguje sprzęt (np.
-        #       BC-250 z ograniczonym VRAM), nie coś, co widać na pierwszy rzut oka.
-        #       Dotyczą WYŁĄCZNIE lokalnej Ollamy - tak jak reszta sterowania usługą.
-        #       WHY QScrollArea: sześć zmiennych z opisami to więcej treści niż
-        #       mieści jedno okno - lepiej przewinąć niż obcinać dolne pozycje.
+        #       BC-250 z ograniczonym VRAM), nie coś, co widać na pierwszy rzut
+        #       oka. Wcześniejsza wersja miała osobny opis + przycisk "Zastosuj"
+        #       przy KAŻDYM z 9 pól - zajmowało to mnóstwo miejsca (dużo
+        #       przewijania) i każda zmiana osobno restartowała usługę. Jeden
+        #       formularz + jeden zapis = jeden restart, nawet przy zmianie
+        #       kilku pól naraz. Dotyczą WYŁĄCZNIE lokalnej Ollamy - tak jak
+        #       reszta sterowania usługą.
         strona = QWidget()
         layout = QVBoxLayout(strona)
 
         karta = QGroupBox(_("Ollama - zmienne środowiskowe usługi"))
         uk = QVBoxLayout(karta)
         lbl_wstep = QLabel(
-            _("Każda zmiana zapisuje override systemd i restartuje usługę Ollama "
-              "(wymaga uprawnień administratora - załadowane modele na chwilę znikną "
-              "z pamięci). Puste pole + Zastosuj = powrót do domyślnego zachowania Ollamy.")
+            _("Opis każdej zmiennej: zakładka \"Pomoc\". \"Zapisz\" stosuje "
+              "WSZYSTKIE pola naraz i restartuje usługę Ollama (wymaga uprawnień "
+              "administratora - załadowane modele na chwilę znikną z pamięci). "
+              "Puste pole = domyślne zachowanie Ollamy.")
         )
         lbl_wstep.setWordWrap(True)
         uk.addWidget(lbl_wstep)
 
-        uklad, self.pole_keep_alive, self.btn_keep_alive, self.lbl_keep_alive_aktualny = self._wiersz_ollama_env(
-            "OLLAMA_KEEP_ALIVE",
-            _("Jak długo model zostaje w pamięci po ostatnim zapytaniu, zanim zostanie "
-              "wyładowany (domyślnie kilka minut). np. 30m, 1h, -1 (zawsze), 0 (od razu)."),
-            "np. 30m",
-            self.ustaw_keep_alive,
-        )
-        uk.addLayout(uklad)
+        formularz = QFormLayout()
 
-        uklad, self.pole_context_length, self.btn_context_length, self.lbl_context_length_aktualny = self._wiersz_ollama_env(
-            "OLLAMA_CONTEXT_LENGTH",
-            _("Rozmiar okna kontekstu w tokenach (domyślnie 4096 - za mało do pracy "
-              "agentowej w Continue/OpenCode)."),
-            "np. 32768",
-            self.ustaw_context_length,
-        )
-        uk.addLayout(uklad)
+        self.pole_keep_alive = QLineEdit()
+        self.pole_keep_alive.setPlaceholderText("np. 30m")
+        formularz.addRow("OLLAMA_KEEP_ALIVE", self.pole_keep_alive)
 
-        uklad, self.pole_max_loaded, self.btn_max_loaded, self.lbl_max_loaded_aktualny = self._wiersz_ollama_env(
-            "OLLAMA_MAX_LOADED_MODELS",
-            _("Ile modeli może być jednocześnie załadowanych do pamięci (domyślnie "
-              "3x liczba GPU)."),
-            "np. 1",
-            self.ustaw_max_loaded_models,
-        )
-        uk.addLayout(uklad)
+        self.pole_context_length = QLineEdit()
+        self.pole_context_length.setPlaceholderText("np. 16384")
+        formularz.addRow("OLLAMA_CONTEXT_LENGTH", self.pole_context_length)
 
-        uklad, self.pole_num_parallel, self.btn_num_parallel, self.lbl_num_parallel_aktualny = self._wiersz_ollama_env(
-            "OLLAMA_NUM_PARALLEL",
-            _("Ile równoległych zapytań obsłuży jeden załadowany model naraz."),
-            "np. 1",
-            self.ustaw_num_parallel,
-        )
-        uk.addLayout(uklad)
+        self.pole_max_loaded = QLineEdit()
+        self.pole_max_loaded.setPlaceholderText("np. 1")
+        formularz.addRow("OLLAMA_MAX_LOADED_MODELS", self.pole_max_loaded)
 
-        uklad, self.combo_flash_attention, self.btn_flash_attention, self.lbl_flash_attention_aktualny = (
-            self._wiersz_ollama_env_combo(
-                "OLLAMA_FLASH_ATTENTION",
-                _("Zmniejsza zużycie pamięci przy dłuższym kontekście, jeśli model i "
-                  "sprzęt to wspierają."),
-                [(_("domyślne (auto)"), ""), (_("włączone"), "1"), (_("wyłączone"), "0")],
-                self.ustaw_flash_attention,
-            )
-        )
-        uk.addLayout(uklad)
+        self.pole_num_parallel = QLineEdit()
+        self.pole_num_parallel.setPlaceholderText("np. 1")
+        formularz.addRow("OLLAMA_NUM_PARALLEL", self.pole_num_parallel)
 
-        uklad, self.combo_kv_cache, self.btn_kv_cache, self.lbl_kv_cache_aktualny = self._wiersz_ollama_env_combo(
-            "OLLAMA_KV_CACHE_TYPE",
-            _("Kwantyzacja pamięci podręcznej kontekstu - q8_0 to ok. -50% zużycia "
-              "VRAM przy pomijalnej stracie jakości."),
-            [(_("domyślne (f16)"), ""), ("q8_0", "q8_0"), ("q4_0", "q4_0")],
-            self.ustaw_kv_cache_type,
-        )
-        uk.addLayout(uklad)
+        self.combo_flash_attention = QComboBox()
+        for etykieta, wartosc in [(_("domyślne (auto)"), ""), (_("włączone"), "1"), (_("wyłączone"), "0")]:
+            self.combo_flash_attention.addItem(etykieta, wartosc)
+        formularz.addRow("OLLAMA_FLASH_ATTENTION", self.combo_flash_attention)
 
-        uklad, self.chk_vulkan, self.btn_vulkan, self.lbl_vulkan_aktualny = self._wiersz_ollama_env_checkbox(
-            "OLLAMA_VULKAN",
-            _("Backend Vulkan zamiast ROCm - szersza kompatybilność z kartami AMD "
-              "bez pełnego wsparcia ROCm (np. BC-250)."),
-            _("Włącz Vulkan"),
-            self.ustaw_vulkan,
-        )
-        uk.addLayout(uklad)
+        self.combo_kv_cache = QComboBox()
+        for etykieta, wartosc in [(_("domyślne (f16)"), ""), ("q8_0", "q8_0"), ("q4_0", "q4_0")]:
+            self.combo_kv_cache.addItem(etykieta, wartosc)
+        formularz.addRow("OLLAMA_KV_CACHE_TYPE", self.combo_kv_cache)
 
-        uklad, self.chk_igpu, self.btn_igpu, self.lbl_igpu_aktualny = self._wiersz_ollama_env_checkbox(
-            "OLLAMA_IGPU_ENABLE",
-            _("Czy Ollama może korzystać ze zintegrowanego GPU (iGPU) - domyślnie "
-              "włączone. Odznacz, żeby wymusić pominięcie iGPU (np. przy problemach "
-              "na jednolitej architekturze CPU+GPU jak BC-250)."),
-            _("Włącz iGPU (domyślnie włączone)"),
-            self.ustaw_igpu,
-        )
-        uk.addLayout(uklad)
+        self.chk_vulkan = QCheckBox()
+        formularz.addRow("OLLAMA_VULKAN", self.chk_vulkan)
 
-        uklad, self.chk_host, self.btn_host, self.lbl_host_aktualny = self._wiersz_ollama_env_checkbox(
-            "OLLAMA_HOST",
-            _("Domyślnie Ollama nasłuchuje tylko lokalnie (127.0.0.1) - inne urządzenia "
-              "w sieci nie mogą się połączyć. Zaznacz, żeby nasłuchiwała na wszystkich "
-              "interfejsach (0.0.0.0) i była dostępna spoza tego komputera (np. z innego "
-              "PC albo dla BC-250 pracującego jako klient)."),
-            _("Zezwól na dostęp spoza komputera (0.0.0.0)"),
-            self.ustaw_host,
-        )
-        uk.addLayout(uklad)
+        self.chk_igpu = QCheckBox()
+        formularz.addRow("OLLAMA_IGPU_ENABLE", self.chk_igpu)
+
+        self.chk_host = QCheckBox()
+        formularz.addRow("OLLAMA_HOST", self.chk_host)
+
+        self.pole_ggml_vk_visible_devices = QLineEdit()
+        self.pole_ggml_vk_visible_devices.setPlaceholderText("np. 0")
+        formularz.addRow("GGML_VK_VISIBLE_DEVICES", self.pole_ggml_vk_visible_devices)
+
+        uk.addLayout(formularz)
+
+        lbl_wlasne = QLabel(_("Własne parametry (jeden na linię, KLUCZ=WARTOŚĆ):"))
+        uk.addWidget(lbl_wlasne)
+        self.pole_wlasne_zmienne = QPlainTextEdit()
+        self.pole_wlasne_zmienne.setPlaceholderText("OLLAMA_...=...")
+        self.pole_wlasne_zmienne.setMaximumHeight(100)
+        uk.addWidget(self.pole_wlasne_zmienne)
+
+        pasek_przyciskow = QHBoxLayout()
+        self.btn_zalecane_zaawansowane = QPushButton(_("Zastosuj zalecane wartości"))
+        self.btn_zalecane_zaawansowane.clicked.connect(self.zastosuj_zalecane_zaawansowane)
+        pasek_przyciskow.addWidget(self.btn_zalecane_zaawansowane)
+        pasek_przyciskow.addStretch(1)
+        self.btn_zapisz_zaawansowane = QPushButton(_("Zapisz"))
+        self.btn_zapisz_zaawansowane.clicked.connect(self.zapisz_zaawansowane)
+        pasek_przyciskow.addWidget(self.btn_zapisz_zaawansowane)
+        uk.addLayout(pasek_przyciskow)
 
         layout.addWidget(karta)
         layout.addStretch(1)
@@ -1542,6 +1593,64 @@ class MainWindow(QMainWindow):
         przewijanie.setWidget(strona)
         przewijanie.setWidgetResizable(True)
         przewijanie.setFrameShape(QScrollArea.Shape.NoFrame)  # WHY: bez podwójnej ramki (QScrollArea + karta)
+        return przewijanie
+
+    def _zakladka_pomoc(self):
+        # WHAT: pełne opisy zmiennych środowiskowych Ollamy z zakładki
+        #       "Zaawansowane" - wydzielone tutaj, żeby tamta zakładka mogła
+        #       być krótkim formularzem (nazwa + pole), bez ściany tekstu.
+        # WHY:  9 opisów naraz w jednej zakładce z polami wymuszało mnóstwo
+        #       przewijania - rozdzielenie "co ustawić" (Zaawansowane) od
+        #       "co to znaczy" (tu) trzyma obie zakładki czytelne.
+        strona = QWidget()
+        layout = QVBoxLayout(strona)
+
+        karta = QGroupBox(_("Opis zmiennych środowiskowych Ollamy"))
+        uk = QVBoxLayout(karta)
+
+        opisy = [
+            ("OLLAMA_KEEP_ALIVE", _("Jak długo model zostaje w pamięci po ostatnim zapytaniu, zanim zostanie "
+                                     "wyładowany (domyślnie kilka minut). np. 30m, 1h, -1 (zawsze), 0 (od razu).")),
+            ("OLLAMA_CONTEXT_LENGTH", _("Rozmiar okna kontekstu w tokenach (domyślnie 4096 - za mało do pracy "
+                                         "agentowej w Continue/OpenCode).")),
+            ("OLLAMA_MAX_LOADED_MODELS", _("Ile modeli może być jednocześnie załadowanych do pamięci (domyślnie "
+                                            "3x liczba GPU).")),
+            ("OLLAMA_NUM_PARALLEL", _("Ile równoległych zapytań obsłuży jeden załadowany model naraz.")),
+            ("OLLAMA_FLASH_ATTENTION", _("Zmniejsza zużycie pamięci przy dłuższym kontekście, jeśli model i "
+                                          "sprzęt to wspierają.")),
+            ("OLLAMA_KV_CACHE_TYPE", _("Kwantyzacja pamięci podręcznej kontekstu - q8_0 to ok. -50% zużycia "
+                                        "VRAM przy pomijalnej stracie jakości.")),
+            ("OLLAMA_VULKAN", _("Backend Vulkan zamiast ROCm - szersza kompatybilność z kartami AMD "
+                                 "bez pełnego wsparcia ROCm (np. BC-250).")),
+            ("OLLAMA_IGPU_ENABLE", _("Czy Ollama może korzystać ze zintegrowanego GPU (iGPU) - domyślnie "
+                                      "włączone. Wyłącz (w zakładce Zaawansowane), żeby wymusić pominięcie iGPU "
+                                      "(np. przy problemach na jednolitej architekturze CPU+GPU jak BC-250).")),
+            ("OLLAMA_HOST", _("Domyślnie Ollama nasłuchuje tylko lokalnie (127.0.0.1) - inne urządzenia "
+                               "w sieci nie mogą się połączyć. Włącz (w zakładce Zaawansowane), żeby "
+                               "nasłuchiwała na wszystkich interfejsach (0.0.0.0) i była dostępna spoza tego "
+                               "komputera (np. z innego PC albo dla BC-250 pracującego jako klient).")),
+            ("GGML_VK_VISIBLE_DEVICES", _("Który indeks urządzenia Vulkan ma być widoczny dla backendu "
+                                           "(0 = pierwsze) - niezbędne na niektórych APU (np. BC-250), gdzie "
+                                           "Vulkan wylicza kilka urządzeń naraz i bez tego Ollama może wybrać "
+                                           "złe. Działa tylko razem z włączonym OLLAMA_VULKAN.")),
+        ]
+        for nazwa, opis in opisy:
+            lbl_nazwa = QLabel(nazwa)
+            czcionka = lbl_nazwa.font()
+            czcionka.setBold(True)
+            lbl_nazwa.setFont(czcionka)
+            uk.addWidget(lbl_nazwa)
+            lbl_opis = QLabel(opis)
+            lbl_opis.setWordWrap(True)
+            uk.addWidget(lbl_opis)
+
+        layout.addWidget(karta)
+        layout.addStretch(1)
+
+        przewijanie = QScrollArea()
+        przewijanie.setWidget(strona)
+        przewijanie.setWidgetResizable(True)
+        przewijanie.setFrameShape(QScrollArea.Shape.NoFrame)
         return przewijanie
 
     # --- Przełącznik serwera ---
@@ -1636,59 +1745,53 @@ class MainWindow(QMainWindow):
         self.refresh_worker.wynik.connect(self._po_odswiezeniu)
         self.refresh_worker.start()
 
+    def _ustaw_combo_wg_wartosci(self, combo, wartosc):
+        indeks = combo.findData(wartosc)
+        combo.setCurrentIndex(indeks if indeks >= 0 else 0)
+
     def _odswiez_zakladke_zaawansowane(self, stan):
-        # WHAT: pokazuje aktualne wartości zmiennych środowiskowych Ollamy i
-        #       blokuje pola, gdy Ollama nie jest zainstalowana (restart nie ma sensu).
-        env = stan["env_ollama"]
+        # WHAT: blokuje formularz, gdy Ollama nie jest zainstalowana (restart
+        #       nie ma sensu) - to dzieje się przy KAŻDYM odświeżeniu (co 10 s).
+        #       Rzeczywisty stan override.conf wczytujemy do pól TYLKO raz
+        #       (patrz self._zaawansowane_wczytane, ustawiane w _buduj_ui i
+        #       zerowane w zapisz_zaawansowane) - inaczej cykliczne odświeżanie
+        #       nadpisywałoby to, co user właśnie wpisuje, zanim zdąży kliknąć
+        #       "Zapisz".
         for widget in (
-            self.pole_keep_alive, self.btn_keep_alive,
-            self.pole_context_length, self.btn_context_length,
-            self.pole_max_loaded, self.btn_max_loaded,
-            self.pole_num_parallel, self.btn_num_parallel,
-            self.combo_flash_attention, self.btn_flash_attention,
-            self.combo_kv_cache, self.btn_kv_cache,
-            self.chk_vulkan, self.btn_vulkan,
-            self.chk_igpu, self.btn_igpu,
-            self.chk_host, self.btn_host,
+            self.pole_keep_alive, self.pole_context_length, self.pole_max_loaded,
+            self.pole_num_parallel, self.combo_flash_attention, self.combo_kv_cache,
+            self.chk_vulkan, self.chk_igpu, self.chk_host, self.pole_ggml_vk_visible_devices,
+            self.pole_wlasne_zmienne, self.btn_zalecane_zaawansowane, self.btn_zapisz_zaawansowane,
         ):
             widget.setEnabled(stan["zainstalowana"])
 
-        _AKTUALNIE = _("aktualnie: {wartosc}")
-        self.lbl_keep_alive_aktualny.setText(
-            _AKTUALNIE.format(wartosc=env.get("OLLAMA_KEEP_ALIVE") or _("domyślne"))
-        )
-        self.lbl_context_length_aktualny.setText(
-            _AKTUALNIE.format(wartosc=env.get("OLLAMA_CONTEXT_LENGTH") or _("domyślne (4096)"))
-        )
-        self.lbl_max_loaded_aktualny.setText(
-            _AKTUALNIE.format(wartosc=env.get("OLLAMA_MAX_LOADED_MODELS") or _("domyślne"))
-        )
-        self.lbl_num_parallel_aktualny.setText(
-            _AKTUALNIE.format(wartosc=env.get("OLLAMA_NUM_PARALLEL") or _("domyślne"))
-        )
-        self.lbl_flash_attention_aktualny.setText(
-            _AKTUALNIE.format(wartosc=env.get("OLLAMA_FLASH_ATTENTION") or _("domyślne (auto)"))
-        )
-        self.lbl_kv_cache_aktualny.setText(
-            _AKTUALNIE.format(wartosc=env.get("OLLAMA_KV_CACHE_TYPE") or _("domyślne (f16)"))
-        )
-        # WHY: checkbox nie ma osobnego sygnału do auto-zastosowania (jak
-        #      chk_autostart) - synchronizacja stanu przy odświeżeniu nie
-        #      wywoła żadnej akcji, więc nie trzeba blockSignals.
+        if self._zaawansowane_wczytane:
+            return
+        self._zaawansowane_wczytane = True
+
+        env = stan["env_ollama"]
+        self.pole_keep_alive.setText(env.get("OLLAMA_KEEP_ALIVE", ""))
+        self.pole_context_length.setText(env.get("OLLAMA_CONTEXT_LENGTH", ""))
+        self.pole_max_loaded.setText(env.get("OLLAMA_MAX_LOADED_MODELS", ""))
+        self.pole_num_parallel.setText(env.get("OLLAMA_NUM_PARALLEL", ""))
+        self._ustaw_combo_wg_wartosci(self.combo_flash_attention, env.get("OLLAMA_FLASH_ATTENTION", ""))
+        self._ustaw_combo_wg_wartosci(self.combo_kv_cache, env.get("OLLAMA_KV_CACHE_TYPE", ""))
         self.chk_vulkan.setChecked(env.get("OLLAMA_VULKAN") == "1")
-        self.lbl_vulkan_aktualny.setText(_AKTUALNIE.format(wartosc=env.get("OLLAMA_VULKAN") or _("domyślne (0)")))
-        # WHY: OLLAMA_IGPU_ENABLE domyślnie WŁĄCZONE (w przeciwieństwie do Vulkana) -
-        #      checkbox ma być zaznaczony, dopóki ktoś jawnie nie ustawi "false".
-        self.chk_igpu.setChecked(env.get("OLLAMA_IGPU_ENABLE") != "false")
-        self.lbl_igpu_aktualny.setText(
-            _AKTUALNIE.format(wartosc=env.get("OLLAMA_IGPU_ENABLE") or _("domyślne (włączone)"))
-        )
-        # WHY: domyślnie WYŁĄCZONE (dostęp tylko lokalny) - tak jak Vulkan, więc
-        #      checkbox jest zaznaczony tylko, gdy zmienna faktycznie ustawiona.
+        # WHY: IGPU_ENABLE domyślnie WŁĄCZONE - checkbox zaznaczony, dopóki nie
+        #      ma jawnego wyłączenia. Akceptujemy zarówno "0" (nowy, jawny
+        #      zapis - patrz zapisz_zaawansowane) jak i "false" (stary format
+        #      sprzed przebudowy tej zakładki na jeden formularz).
+        self.chk_igpu.setChecked(env.get("OLLAMA_IGPU_ENABLE") not in ("0", "false"))
         self.chk_host.setChecked(bool(env.get("OLLAMA_HOST")))
-        self.lbl_host_aktualny.setText(
-            _AKTUALNIE.format(wartosc=env.get("OLLAMA_HOST") or _("domyślne (tylko lokalnie, 127.0.0.1)"))
-        )
+        self.pole_ggml_vk_visible_devices.setText(env.get("GGML_VK_VISIBLE_DEVICES", ""))
+
+        # WHY: pola/checkboxy wyżej pokrywają 9 "znanych" zmiennych - wszystko
+        #      inne, co siedzi w override.conf (np. dopisane ręcznie kiedyś
+        #      przez systemctl edit), ląduje w polu "własne parametry", żeby
+        #      formularz niczego nie gubił przy następnym zapisie.
+        znane = set(OLLAMA_ZALECANE.keys())
+        wlasne = [f"{k}={v}" for k, v in env.items() if k not in znane]
+        self.pole_wlasne_zmienne.setPlainText("\n".join(wlasne))
 
     def _po_odswiezeniu(self, stan):
         # WHAT: przełóż stan usługi/API na wygląd okna.
@@ -1897,68 +2000,90 @@ class MainWindow(QMainWindow):
         self.wpis_log(opis + "...")
         self._uruchom_akcje(lambda: usluga_autostart(wlacz), opis)
 
-    def _ustaw_zmienna_ollama(self, nazwa_env, wartosc):
-        # WHAT: wspólne potwierdzenie + wywołanie dla wszystkich pól w zakładce
-        #       "Zaawansowane" - jedna metoda zamiast sześciu prawie identycznych.
-        # WHY:  pusta wartość = usunięcie zmiennej (powrót do domyślnego
-        #       zachowania Ollamy), więc treść pytania rozróżnia oba przypadki.
-        if wartosc:
-            tresc = _('Ustawić {nazwa} na "{wartosc}" i zrestartować usługę Ollama?').format(
-                nazwa=nazwa_env, wartosc=wartosc
-            )
-        else:
-            tresc = _("Usunąć {nazwa} (wrócić do domyślnego zachowania Ollamy) i zrestartować usługę?").format(
-                nazwa=nazwa_env
-            )
+    def zastosuj_zalecane_zaawansowane(self):
+        # WHAT: wypełnia formularz zalecanym profilem (OLLAMA_ZALECANE) - NIC
+        #       nie zapisuje na dysk. To tylko punkt startu do przejrzenia i
+        #       ewentualnej poprawki przed kliknięciem "Zapisz".
+        z = OLLAMA_ZALECANE
+        self.pole_keep_alive.setText(z["OLLAMA_KEEP_ALIVE"])
+        self.pole_context_length.setText(z["OLLAMA_CONTEXT_LENGTH"])
+        self.pole_max_loaded.setText(z["OLLAMA_MAX_LOADED_MODELS"])
+        self.pole_num_parallel.setText(z["OLLAMA_NUM_PARALLEL"])
+        self._ustaw_combo_wg_wartosci(self.combo_flash_attention, z["OLLAMA_FLASH_ATTENTION"])
+        self._ustaw_combo_wg_wartosci(self.combo_kv_cache, z["OLLAMA_KV_CACHE_TYPE"])
+        self.chk_vulkan.setChecked(z["OLLAMA_VULKAN"] == "1")
+        self.chk_igpu.setChecked(z["OLLAMA_IGPU_ENABLE"] == "1")
+        self.chk_host.setChecked(bool(z["OLLAMA_HOST"]))
+        self.pole_ggml_vk_visible_devices.setText(z["GGML_VK_VISIBLE_DEVICES"])
+        self.wpis_log(_('Wypełniono formularz zalecanymi wartościami - sprawdź i kliknij "Zapisz", żeby je zastosować.'))
+
+    def zapisz_zaawansowane(self):
+        # WHAT: składa WSZYSTKIE pola formularza (9 znanych zmiennych + własne
+        #       parametry) w jeden słownik i zapisuje go JEDNYM wywołaniem
+        #       usluga_zapisz_env - jeden zapis, jeden restart Ollamy,
+        #       niezależnie od tego, ile pól zmieniłeś naraz.
+        zmienne = {}
+        keep_alive = self.pole_keep_alive.text().strip()
+        if keep_alive:
+            zmienne["OLLAMA_KEEP_ALIVE"] = keep_alive
+        context_length = self.pole_context_length.text().strip()
+        if context_length:
+            zmienne["OLLAMA_CONTEXT_LENGTH"] = context_length
+        max_loaded = self.pole_max_loaded.text().strip()
+        if max_loaded:
+            zmienne["OLLAMA_MAX_LOADED_MODELS"] = max_loaded
+        num_parallel = self.pole_num_parallel.text().strip()
+        if num_parallel:
+            zmienne["OLLAMA_NUM_PARALLEL"] = num_parallel
+        flash_attention = self.combo_flash_attention.currentData()
+        if flash_attention:
+            zmienne["OLLAMA_FLASH_ATTENTION"] = flash_attention
+        kv_cache = self.combo_kv_cache.currentData()
+        if kv_cache:
+            zmienne["OLLAMA_KV_CACHE_TYPE"] = kv_cache
+        # WHY: Vulkan i iGPU zawsze dostają jawną wartość "1"/"0" (nie "puste =
+        #      domyślne") - łatwiej odczytać z pliku, co faktycznie jest
+        #      ustawione, niż zgadywać ze samego braku wpisu.
+        zmienne["OLLAMA_VULKAN"] = "1" if self.chk_vulkan.isChecked() else "0"
+        zmienne["OLLAMA_IGPU_ENABLE"] = "1" if self.chk_igpu.isChecked() else "0"
+        # WHY: HOST to adres, nie zwykły przełącznik 0/1 - odznaczenie po
+        #      prostu nie dopisuje klucza (powrót do wbudowanego domyślnego
+        #      "127.0.0.1:11434", czyli tylko lokalnie).
+        if self.chk_host.isChecked():
+            zmienne["OLLAMA_HOST"] = "0.0.0.0:11434"
+        ggml_vk_visible_devices = self.pole_ggml_vk_visible_devices.text().strip()
+        if ggml_vk_visible_devices:
+            zmienne["GGML_VK_VISIBLE_DEVICES"] = ggml_vk_visible_devices
+
+        for numer, linia in enumerate(self.pole_wlasne_zmienne.toPlainText().splitlines(), start=1):
+            linia = linia.strip()
+            if not linia:
+                continue
+            if "=" not in linia:
+                QMessageBox.warning(
+                    self, _("Błąd we własnych parametrach"),
+                    _('Linia {numer} ("{linia}") nie ma postaci KLUCZ=WARTOŚĆ - popraw ją przed zapisem.').format(
+                        numer=numer, linia=linia
+                    ),
+                )
+                return
+            klucz, wartosc = linia.split("=", 1)
+            klucz = klucz.strip()
+            if klucz:
+                zmienne[klucz] = wartosc.strip()
+
         odp = QMessageBox.question(
-            self, _("Zmiana ustawień Ollamy"),
-            tresc + "\n\n" + _(
+            self, _("Zapisanie ustawień Ollamy"),
+            _("Zapisać wszystkie pola z tej zakładki i zrestartować usługę Ollama?") + "\n\n" + _(
                 "Wymaga uprawnień administratora - aktualnie załadowane\n"
                 "modele zostaną na chwilę wyładowane z pamięci."
             ),
         )
         if odp != QMessageBox.StandardButton.Yes:
             return
-        self.wpis_log(_("Ustawiam {nazwa}={wartosc}...").format(nazwa=nazwa_env, wartosc=wartosc or _("(domyślne)")))
-        self._uruchom_akcje(
-            lambda: usluga_ustaw_zmienna(nazwa_env, wartosc), _("Ustawienie {nazwa}").format(nazwa=nazwa_env)
-        )
-
-    def ustaw_keep_alive(self):
-        self._ustaw_zmienna_ollama("OLLAMA_KEEP_ALIVE", self.pole_keep_alive.text().strip())
-
-    def ustaw_context_length(self):
-        self._ustaw_zmienna_ollama("OLLAMA_CONTEXT_LENGTH", self.pole_context_length.text().strip())
-
-    def ustaw_max_loaded_models(self):
-        self._ustaw_zmienna_ollama("OLLAMA_MAX_LOADED_MODELS", self.pole_max_loaded.text().strip())
-
-    def ustaw_num_parallel(self):
-        self._ustaw_zmienna_ollama("OLLAMA_NUM_PARALLEL", self.pole_num_parallel.text().strip())
-
-    def ustaw_flash_attention(self):
-        self._ustaw_zmienna_ollama("OLLAMA_FLASH_ATTENTION", self.combo_flash_attention.currentData())
-
-    def ustaw_kv_cache_type(self):
-        self._ustaw_zmienna_ollama("OLLAMA_KV_CACHE_TYPE", self.combo_kv_cache.currentData())
-
-    def ustaw_vulkan(self):
-        # WHY: to zwykły przełącznik 0/1, nie "ustaw albo wróć do domyślnego"
-        #      jak pola tekstowe - odznaczenie zapisuje jawne "0", a nie usuwa zmienną.
-        self._ustaw_zmienna_ollama("OLLAMA_VULKAN", "1" if self.chk_vulkan.isChecked() else "0")
-
-    def ustaw_igpu(self):
-        # WHY: odwrotnie niż Vulkan - domyślnie WŁĄCZONE, więc zaznaczenie
-        #      usuwa zmienną (powrót do domyślnego "włączone"), a odznaczenie
-        #      zapisuje jawne "false", żeby wymusić wyłączenie iGPU.
-        self._ustaw_zmienna_ollama("OLLAMA_IGPU_ENABLE", "" if self.chk_igpu.isChecked() else "false")
-
-    def ustaw_host(self):
-        # WHY: to zwykły przełącznik "wyłączone/włączone", jak Vulkan - zaznaczenie
-        #      zapisuje jawny adres nasłuchu na wszystkich interfejsach (port 11434,
-        #      ten sam co domyślny), odznaczenie USUWA zmienną (powrót do wbudowanego
-        #      domyślnego "127.0.0.1:11434" - tylko lokalnie).
-        self._ustaw_zmienna_ollama("OLLAMA_HOST", "0.0.0.0:11434" if self.chk_host.isChecked() else "")
+        self.wpis_log(_("Zapisuję ustawienia Ollamy..."))
+        self._zaawansowane_wczytane = False  # WHY: po restarcie odśwież formularz faktycznie zapisanym stanem
+        self._uruchom_akcje(lambda: usluga_zapisz_env(zmienne), _("Zapisanie ustawień Ollamy"))
 
     def przelacz_webui_autostart(self, wlacz):
         # WHAT: reakcja na kliknięcie checkboxa autostartu WebUI.
@@ -2104,10 +2229,37 @@ class MainWindow(QMainWindow):
             lambda: self.client.delete_model(model), _("Usunięcie {model}").format(model=model)
         )
 
-    def pobierz_model(self):
-        model = self.combo_modele.currentText().strip()
-        if not model:
+    def _aktualizuj_szacowana_pamiec(self):
+        # WHAT: przelicza i pokazuje orientacyjne zużycie pamięci dla aktualnie
+        #       wpisanego rozmiaru + kwantyzacji - na żywo, przy każdej zmianie.
+        # WHY:  rozmiar bierzemy najpierw z osobnego pola "Rozmiar"; jeśli puste,
+        #       próbujemy go wyciągnąć z samej nazwy modelu (np. gdy ktoś wybrał
+        #       z listy gotowe "llama3.1:8b" bez użycia pola Rozmiar).
+        miliardy = _parsuj_rozmiar_parametrow(self.combo_rozmiar.currentText())
+        if miliardy is None:
+            miliardy = _parsuj_rozmiar_parametrow(self.combo_modele.currentText())
+        if miliardy is None:
+            self.lbl_szacowana_pamiec.setText(
+                _("Szacowane zużycie pamięci: podaj rozmiar modelu (np. 8b), żeby zobaczyć wyliczenie.")
+            )
             return
+        kwantyzacja = self.combo_kwantyzacja.currentData()
+        wagi_gb, zalecane_gb = _oszacuj_pamiec_gb(miliardy, kwantyzacja)
+        self.lbl_szacowana_pamiec.setText(
+            _("Szacowane zużycie pamięci: same wagi ~{wagi:.1f} GB, zalecane minimum "
+              "(orientacyjnie, z zapasem na kontekst) ~{zalecane:.1f} GB. Rzeczywiste "
+              "zużycie zależy od długości kontekstu i architektury modelu.").format(
+                wagi=wagi_gb, zalecane=zalecane_gb
+            )
+        )
+
+    def pobierz_model(self):
+        model_wpisany = self.combo_modele.currentText().strip()
+        if not model_wpisany:
+            return
+        model = _zbuduj_tag_modelu(
+            model_wpisany, self.combo_rozmiar.currentText(), self.combo_kwantyzacja.currentData()
+        )
         # WHY: jedno pobieranie naraz - prościej i nie obciąża łącza/dysku podwójnie.
         if self.pull_worker and self.pull_worker.isRunning():
             self.wpis_log(_("Pobieranie już trwa - poczekaj na zakończenie."))

@@ -60,7 +60,10 @@ python3 ollama_manager.py
 
 **Modele**
 - Lista zainstalowanych modeli + usuwanie
-- Pobieranie nowych modeli z podpowiedziami popularnych (Llama, Gemma, Mistral, Phi, DeepSeek, Qwen) i paskiem postępu
+- Pobieranie nowych modeli z podpowiedziami popularnych (Llama, Gemma, Mistral, Phi, DeepSeek,
+  Qwen, GPT-OSS, Ornith...) i paskiem postępu
+- Opcjonalny wybór rozmiaru i kwantyzacji (domyślna/Q8_0/pełna F16) przy pobieraniu, z bieżącym,
+  orientacyjnym wyliczeniem zużycia pamięci (dokładne wagi + przybliżone zalecane minimum)
 - Podgląd modeli aktualnie załadowanych do pamięci (VRAM)
 
 **Open WebUI**
@@ -77,14 +80,20 @@ python3 ollama_manager.py
 - Wystawia jeden endpoint (zgodny z API OpenAI) łączący modele ze WSZYSTKICH
   serwerów z listy przełącznika — VS Code/Continue wskazuje tylko na ten adres
 - Podgląd, jakie modele i hosty trafią do configu, przed uruchomieniem
+- Generuje gotowy do wklejenia `config.yaml` dla Continue.dev na podstawie wystawionych modeli —
+  appka nigdy sama nie zapisuje tego pliku, tylko podgląd/kopiowanie
 
 **Zaawansowane (zmienne środowiskowe Ollamy)**
-- `OLLAMA_KEEP_ALIVE` — jak długo model zostaje w pamięci po ostatnim zapytaniu
-- `OLLAMA_CONTEXT_LENGTH` — rozmiar okna kontekstu (domyślne 4096 za mało do pracy agentowej)
-- `OLLAMA_MAX_LOADED_MODELS`, `OLLAMA_NUM_PARALLEL`, `OLLAMA_FLASH_ATTENTION`, `OLLAMA_KV_CACHE_TYPE`
-- `OLLAMA_VULKAN` — backend Vulkan zamiast ROCm (przydatne na kartach AMD bez pełnego wsparcia ROCm, np. BC-250)
-- `OLLAMA_IGPU_ENABLE` — czy Ollama może korzystać ze zintegrowanego GPU (domyślnie włączone)
-- Każda zmiana zapisuje override systemd i restartuje usługę — z poziomu okna, bez edycji plików ręcznie
+- `OLLAMA_KEEP_ALIVE`, `OLLAMA_CONTEXT_LENGTH` (domyślne 4096 za mało do pracy agentowej),
+  `OLLAMA_MAX_LOADED_MODELS`, `OLLAMA_NUM_PARALLEL`, `OLLAMA_FLASH_ATTENTION`, `OLLAMA_KV_CACHE_TYPE`,
+  `OLLAMA_VULKAN` (backend Vulkan zamiast ROCm, przydatne na kartach AMD bez pełnego wsparcia ROCm
+  np. BC-250), `OLLAMA_IGPU_ENABLE`, `OLLAMA_HOST` (nasłuch w sieci LAN zamiast tylko lokalnie),
+  `GGML_VK_VISIBLE_DEVICES` (indeks urządzenia Vulkan — niezbędne na niektórych APU)
+- Jeden przycisk "Zapisz" stosuje wszystkie pola naraz i restartuje usługę tylko raz, plus
+  przycisk "Zastosuj zalecane wartości", który wypełnia formularz sensownym profilem startowym
+  do przejrzenia przed zapisem
+- Wolne pole na dowolną inną zmienną środowiskową, spoza gotowego formularza
+- Pełne opisy każdej zmiennej są w osobnej zakładce "Pomoc" — ta zakładka zostaje kompaktowa
 
 **Pasek statystyk**
 - Status Ollamy i Open WebUI

@@ -61,7 +61,10 @@ python3 ollama_manager.py
 
 **Models**
 - List of installed models + deletion
-- Downloading new models with suggestions of popular ones (Llama, Gemma, Mistral, Phi, DeepSeek, Qwen) and a progress bar
+- Downloading new models with suggestions of popular ones (Llama, Gemma, Mistral, Phi, DeepSeek,
+  Qwen, GPT-OSS, Ornith...) and a progress bar
+- Optional size and quantization picker (default/Q8_0/full F16) when pulling, with a live,
+  approximate memory-usage estimate (exact weights size + a rough recommended-minimum figure)
 - Preview of models currently loaded into memory (VRAM)
 
 **Open WebUI**
@@ -78,14 +81,19 @@ python3 ollama_manager.py
 - Exposes a single endpoint (OpenAI-compatible) combining models from ALL
   servers on the switcher list — VS Code/Continue only needs to point at this one address
 - Preview of which models and hosts will end up in the config, before starting
+- Generates a ready-to-paste Continue.dev `config.yaml` for the exposed models — copy/paste only,
+  the app never writes to your files
 
 **Advanced (Ollama environment variables)**
-- `OLLAMA_KEEP_ALIVE` — how long a model stays in memory after the last request
-- `OLLAMA_CONTEXT_LENGTH` — context window size (the default 4096 is too small for agentic work)
-- `OLLAMA_MAX_LOADED_MODELS`, `OLLAMA_NUM_PARALLEL`, `OLLAMA_FLASH_ATTENTION`, `OLLAMA_KV_CACHE_TYPE`
-- `OLLAMA_VULKAN` — Vulkan backend instead of ROCm (useful on AMD cards without full ROCm support, e.g. BC-250)
-- `OLLAMA_IGPU_ENABLE` — whether Ollama may use the integrated GPU (enabled by default)
-- Every change writes a systemd override and restarts the service — from the window, no manual file editing
+- `OLLAMA_KEEP_ALIVE`, `OLLAMA_CONTEXT_LENGTH` (default 4096 is too small for agentic work),
+  `OLLAMA_MAX_LOADED_MODELS`, `OLLAMA_NUM_PARALLEL`, `OLLAMA_FLASH_ATTENTION`, `OLLAMA_KV_CACHE_TYPE`,
+  `OLLAMA_VULKAN` (Vulkan backend instead of ROCm, useful on AMD cards without full ROCm support
+  e.g. BC-250), `OLLAMA_IGPU_ENABLE`, `OLLAMA_HOST` (listen on the LAN instead of localhost-only),
+  `GGML_VK_VISIBLE_DEVICES` (Vulkan device index — needed on some APUs)
+- A single "Save" applies every field at once and restarts the service once, plus an "Apply
+  recommended values" button that pre-fills a sane starting profile for review before saving
+- A free-form field for any other environment variable not covered by the form above
+- Full descriptions of each variable live in a separate "Help" tab, keeping this tab compact
 
 **Stats bar**
 - Ollama and Open WebUI status
