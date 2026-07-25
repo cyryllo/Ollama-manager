@@ -7,6 +7,10 @@ jeden endpoint zgodny z API OpenAI dla narzędzi typu Continue/VS Code, oraz pan
 w przeglądarce (Open WebUI). Bez terminala, bez Dockera, bez chmury — wszystko działa
 lokalnie, w Twoim LAN.
 
+> **Status: działa, ale to wciąż wersja beta.** Aktywnie rozwijana — na bieżąco sprawdzam
+> poprawność działania i regularnie dodaję nowe opcje i funkcjonalności. Możliwe drobne
+> niedociągnięcia; [zgłoszenia błędów i uwagi](../../issues) są mile widziane.
+
 ![Ollama Manager — zakładka Usługi](om.png)
 
 ## Wymagania
