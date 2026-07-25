@@ -42,7 +42,7 @@ from PyQt6.QtWidgets import (
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.4.17"
+WERSJA = "0.4.18"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -83,6 +83,12 @@ POLECANE_MODELE = [
     "gpt-oss",            # OpenAI - open-weight, reasoning/agentowy
     "deepseek-coder-v2",  # DeepSeek - MoE do kodu, tool-calling
     "ornith",              # agent kodujący, MIT, kontekst 256K
+    "mxbai-embed-large",  # embeddingi - SOTA jakość dla tej klasy rozmiaru
+    "bge-m3",              # embeddingi - wielojęzyczne, długie dokumenty (do 8192 tokenów)
+    "embeddinggemma",      # embeddingi - najnowsze od Google (na bazie Gemma 3), bardzo lekkie
+    "qwen2.5vl",           # wizyjny (obrazy/OCR/dokumenty) - Qwen
+    "llama3.2-vision",     # wizyjny - Meta
+    "moondream",           # wizyjny - bardzo lekki (<4GB VRAM)
 ]
 
 # WHAT: RZECZYWISTE rozmiary dostępne dla każdego modelu z POLECANE_MODELE -
@@ -111,6 +117,13 @@ ROZMIARY_WG_MODELU = {
     "gpt-oss": ["20b", "120b"],
     "deepseek-coder-v2": ["16b", "236b"],
     "ornith": ["9b", "35b"],
+    "nomic-embed-text": ["137m"],
+    "mxbai-embed-large": ["335m"],
+    "bge-m3": ["567m"],
+    "embeddinggemma": ["300m"],
+    "qwen2.5vl": ["3b", "7b", "32b", "72b"],
+    "llama3.2-vision": ["11b", "90b"],
+    "moondream": ["1.8b"],
 }
 
 # WHAT: podpowiedzi rozmiaru dla modelu spoza POLECANE_MODELE (wpisanego z ręki) -
@@ -857,15 +870,22 @@ def _zbuduj_tag_modelu(model, rozmiar, kwantyzacja):
 
 
 def _parsuj_rozmiar_parametrow(tekst):
-    # WHAT: wyciąga liczbę parametrów (w miliardach) z tekstu typu "8b", "1.5B",
-    #       "70b-instruct" albo "llama3.1:8b" (bierze pierwsze dopasowanie "<liczba>b").
-    # WHY:  potrzebne do orientacyjnego szacowania zużycia pamięci - działa
-    #       zarówno na polu "Rozmiar", jak i na samej nazwie modelu (fallback,
-    #       gdy ktoś wpisał rozmiar wprost do nazwy zamiast do osobnego pola).
-    dopasowanie = re.search(r"(\d+(?:\.\d+)?)\s*[bB](?![a-zA-Z])", tekst)
+    # WHAT: wyciąga liczbę parametrów (W MILIARDACH) z tekstu typu "8b", "1.5B",
+    #       "300m", "70b-instruct", "llama3.1:8b" albo details.parameter_size z
+    #       /api/tags (np. "8.0B", "134.52M") - bierze pierwsze dopasowanie
+    #       "<liczba>b"/"<liczba>m" ("m" = miliony, dzielone przez 1000).
+    # WHY:  wspólna dla pola "Rozmiar" przy pobieraniu (i dla samej nazwy modelu
+    #       jako fallback) ORAZ dla kolumny VRAM na liście zainstalowanych modeli -
+    #       jedna funkcja zamiast dwóch osobnych, żeby nie rozjeżdżały się przy
+    #       zmianach (modele embeddingowe jak mxbai-embed-large/bge-m3/
+    #       embeddinggemma podają rozmiar w milionach, nie miliardach).
+    if not tekst:
+        return None
+    dopasowanie = re.search(r"(\d+(?:\.\d+)?)\s*([bBmM])(?![a-zA-Z])", tekst)
     if not dopasowanie:
         return None
-    return float(dopasowanie.group(1))
+    liczba = float(dopasowanie.group(1))
+    return liczba / 1000 if dopasowanie.group(2).upper() == "M" else liczba
 
 
 # WHAT: mnożnik GB/mld parametrów (bity na wagę, przeliczone) wg wariantu
@@ -928,18 +948,6 @@ _QUANTIZATION_LEVEL_BPW = {
     "Q3_K_M": 0.49,
     "Q2_K": 0.42,
 }
-
-
-def _parsuj_parameter_size(tekst):
-    # WHAT: parsuje details.parameter_size z /api/tags (np. "8.0B", "134.52M")
-    #       na liczbę miliardów parametrów.
-    if not tekst:
-        return None
-    dopasowanie = re.search(r"(\d+(?:\.\d+)?)\s*([BM])\b", tekst, re.IGNORECASE)
-    if not dopasowanie:
-        return None
-    liczba = float(dopasowanie.group(1))
-    return liczba / 1000 if dopasowanie.group(2).upper() == "M" else liczba
 
 
 def _oszacuj_pamiec_bpw(miliardy_parametrow, bpw, etykieta_q):
@@ -2147,7 +2155,7 @@ class MainWindow(QMainWindow):
             if nazwa in vram_wg_nazwy:
                 vram_tekst = _("{gb:.1f} GB (załadowany)").format(gb=vram_wg_nazwy[nazwa] / (1024 ** 3))
             else:
-                miliardy = _parsuj_parameter_size(m.get("parameter_size", ""))
+                miliardy = _parsuj_rozmiar_parametrow(m.get("parameter_size", ""))
                 if miliardy is None:
                     vram_tekst = "—"
                 else:
@@ -2644,7 +2652,7 @@ class MainWindow(QMainWindow):
         w = _oszacuj_pamiec(miliardy, kwantyzacja)
 
         tresc = _(
-            "Model: {p:.0f}B {kwant}, kontekst {ctx} ({kvq})\n"
+            "Model: {p:.3g}B {kwant}, kontekst {ctx} ({kvq})\n"
             "Wagi: {wagi:.1f} GB\n"
             "KV cache: {kv_cache:.1f} GB\n"
             "Bufory: {bufory:.1f} GB\n"
