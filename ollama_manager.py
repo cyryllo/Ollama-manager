@@ -18,6 +18,7 @@
 import sys
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -40,7 +41,7 @@ from PyQt6.QtWidgets import (
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.4.6"
+WERSJA = "0.4.7"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -221,18 +222,35 @@ def _usluga_override_sciezka():
 def _usluga_env_wszystkie():
     # WHAT: czyta WSZYSTKIE zmienne środowiskowe zapisane w override.conf.
     # WHY:  sam ODCZYT pliku w /etc nie wymaga roota - tylko jego ZMIANA (patrz
-    #       usluga_ustaw_zmienna). Parsujemy format, który sami zapisujemy -
-    #       nie trzeba obsługiwać dowolnego syntaksu systemd.
+    #       usluga_ustaw_zmienna). BUG naprawiony: poprzednia wersja zakładała,
+    #       że plik ZAWSZE ma dokładnie nasz własny format (jedna zmienna na
+    #       linię, w cudzysłowach) - ale systemd.exec(5) dopuszcza też WIELE par
+    #       KEY=VALUE oddzielonych spacją w jednej linii Environment=, a cudzysłów
+    #       może być pojedynczy ('...') albo brak go wcale. Jeśli plik był kiedyś
+    #       ręcznie edytowany (np. `sudo systemctl edit ollama` z jakiegoś
+    #       poradnika o Vulkanie), stary parser po cichu gubił zmienne (wchłaniał
+    #       kolejne pary w wartość poprzedniej) albo dostawał klucz z doklejonym
+    #       apostrofem (`'OLLAMA_VULKAN`), który nigdy nie pasował do
+    #       "OLLAMA_VULKAN" - checkbox pokazywał zły stan, a "Zastosuj" dopisywał
+    #       nowy, poprawny wpis OBOK osieroconego śmiecia zamiast go nadpisać.
+    #       shlex.split() parsuje to tak samo, jak zrobiłby to systemd.
     try:
         tresc = _usluga_override_sciezka().read_text()
     except OSError:
         return {}
     zmienne = {}
     for linia in tresc.splitlines():
-        linia = linia.strip().removeprefix("Environment=").strip('"')
-        if "=" in linia:
-            klucz, wartosc = linia.split("=", 1)
-            zmienne[klucz] = wartosc
+        linia = linia.strip()
+        if not linia.startswith("Environment="):
+            continue
+        try:
+            czesci = shlex.split(linia.removeprefix("Environment="))
+        except ValueError:
+            continue  # WHY: niesparsowalna linia (np. niedomknięty cudzysłów) - pomijamy
+        for czesc in czesci:
+            if "=" in czesc:
+                klucz, wartosc = czesc.split("=", 1)
+                zmienne[klucz] = wartosc
     return zmienne
 
 
