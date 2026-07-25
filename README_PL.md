@@ -17,6 +17,8 @@ lokalnie, w Twoim LAN.
 
 - Python 3 + **PyQt6**, **requests**
 - **systemd** + **polkit** (`pkexec`) — standard na KDE/Debian
+- **curl** — używany przez własne przyciski instalacyjne appki (Ollama, oraz uv dla Open WebUI/LiteLLM);
+  `install.sh` proponuje jego instalację przez `apt`, jeśli go brakuje
 - Ollama (jeśli jej nie masz, aplikacja sama ją zainstaluje jednym przyciskiem)
 - Opcjonalnie: **uv** (do instalacji Open WebUI i LiteLLM — aplikacja doinstaluje je sama w razie potrzeby)
 - Opcjonalnie: `ffmpeg`, `pandoc`, `zstd` (pełna funkcjonalność Open WebUI — głos, dokumenty w RAG)
@@ -63,11 +65,14 @@ python3 ollama_manager.py
 - Wykrywanie braku instalacji + przycisk instalującej ją jednym kliknięciem
 
 **Modele**
-- Lista zainstalowanych modeli + usuwanie
+- Tabela zainstalowanych modeli — nazwa, rozmiar na dysku i kolumna z szacowanym/realnym
+  VRAM dla każdego — + usuwanie
 - Pobieranie nowych modeli z podpowiedziami popularnych (Llama, Gemma, Mistral, Phi, DeepSeek,
   Qwen, GPT-OSS, Ornith...) i paskiem postępu
-- Opcjonalny wybór rozmiaru i kwantyzacji (domyślna/Q8_0/pełna F16) przy pobieraniu, z bieżącym,
-  orientacyjnym wyliczeniem zużycia pamięci (dokładne wagi + przybliżone zalecane minimum)
+- Wybór rozmiaru i kwantyzacji (domyślna/Q8_0/pełna F16) przy pobieraniu — lista rozmiarów jest
+  dopasowana do wybranego modelu, zweryfikowana na ollama.com/library, nie jedna ogólna lista dla wszystkich
+- Bieżące, orientacyjne wyliczenie zużycia pamięci (wagi + KV cache + bufory, plus zalecany RAM)
+  przy wyborze rozmiaru/kwantyzacji
 - Podgląd modeli aktualnie załadowanych do pamięci (VRAM)
 
 **Open WebUI**
@@ -92,7 +97,8 @@ python3 ollama_manager.py
   `OLLAMA_MAX_LOADED_MODELS`, `OLLAMA_NUM_PARALLEL`, `OLLAMA_FLASH_ATTENTION`, `OLLAMA_KV_CACHE_TYPE`,
   `OLLAMA_VULKAN` (backend Vulkan zamiast ROCm, przydatne na kartach AMD bez pełnego wsparcia ROCm
   np. BC-250), `OLLAMA_IGPU_ENABLE`, `OLLAMA_HOST` (nasłuch w sieci LAN zamiast tylko lokalnie),
-  `GGML_VK_VISIBLE_DEVICES` (indeks urządzenia Vulkan — niezbędne na niektórych APU)
+  `GGML_VK_VISIBLE_DEVICES` (indeks urządzenia Vulkan — niezbędne na niektórych APU), `OLLAMA_GPU_OVERHEAD`
+  (ile VRAM zarezerwować dla reszty systemu — wybór z gotowych profili pulpit/serwer)
 - Jeden przycisk "Zapisz" stosuje wszystkie pola naraz i restartuje usługę tylko raz, plus
   przycisk "Zastosuj zalecane wartości", który wypełnia formularz sensownym profilem startowym
   do przejrzenia przed zapisem

@@ -18,6 +18,8 @@ everything runs on your LAN.
 
 - Python 3 + **PyQt6**, **requests**
 - **systemd** + **polkit** (`pkexec`) — standard on KDE/Debian
+- **curl** — used by the app's own install buttons (Ollama, and uv for Open WebUI/LiteLLM);
+  `install.sh` offers to install it via `apt` if it's missing
 - Ollama (if you don't have it, the app installs it with one click)
 - Optional: **uv** (for installing Open WebUI and LiteLLM — the app installs it itself if needed)
 - Optional: `ffmpeg`, `pandoc`, `zstd` (full Open WebUI functionality — voice, document RAG)
@@ -64,11 +66,13 @@ python3 ollama_manager.py
 - Detects a missing install + a one-click install button
 
 **Models**
-- List of installed models + deletion
+- Table of installed models — name, disk size, and an estimated/live VRAM column each — + deletion
 - Downloading new models with suggestions of popular ones (Llama, Gemma, Mistral, Phi, DeepSeek,
   Qwen, GPT-OSS, Ornith...) and a progress bar
-- Optional size and quantization picker (default/Q8_0/full F16) when pulling, with a live,
-  approximate memory-usage estimate (exact weights size + a rough recommended-minimum figure)
+- Size and quantization picker (default/Q8_0/full F16) when pulling — the size list is specific
+  to the selected model, verified against ollama.com/library, not a generic one-size-fits-all list
+- Live, approximate memory-usage estimate (weights + KV cache + buffers, then a recommended-RAM
+  figure) as you pick a size/quantization
 - Preview of models currently loaded into memory (VRAM)
 
 **Open WebUI**
@@ -93,7 +97,8 @@ python3 ollama_manager.py
   `OLLAMA_MAX_LOADED_MODELS`, `OLLAMA_NUM_PARALLEL`, `OLLAMA_FLASH_ATTENTION`, `OLLAMA_KV_CACHE_TYPE`,
   `OLLAMA_VULKAN` (Vulkan backend instead of ROCm, useful on AMD cards without full ROCm support
   e.g. BC-250), `OLLAMA_IGPU_ENABLE`, `OLLAMA_HOST` (listen on the LAN instead of localhost-only),
-  `GGML_VK_VISIBLE_DEVICES` (Vulkan device index — needed on some APUs)
+  `GGML_VK_VISIBLE_DEVICES` (Vulkan device index — needed on some APUs), `OLLAMA_GPU_OVERHEAD`
+  (VRAM reserved for the rest of the system — desktop/server preset picker)
 - A single "Save" applies every field at once and restarts the service once, plus an "Apply
   recommended values" button that pre-fills a sane starting profile for review before saving
 - A free-form field for any other environment variable not covered by the form above
