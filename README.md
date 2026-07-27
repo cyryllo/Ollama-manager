@@ -23,7 +23,8 @@ everything runs on your LAN.
   `install.sh` offers to install it via `apt` if it's missing
 - Ollama (if you don't have it, the app installs it with one click)
 - Optional: **uv** (for installing Open WebUI and LiteLLM — the app installs it itself if needed)
-- Optional: `ffmpeg`, `pandoc`, `zstd` (full Open WebUI functionality — voice, document RAG)
+- Optional: `ffmpeg`, `pandoc`, `zstd` (full Open WebUI functionality — voice, document RAG;
+  the app offers to install these via `apt` right after a successful Open WebUI install)
 
 ## Installation and running
 

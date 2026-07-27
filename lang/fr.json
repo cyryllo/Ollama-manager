@@ -173,5 +173,9 @@
   "Pisanie i edycja kodu, wspierają tool-calling pod Continue/OpenCode.": "Écriture et modification de code, prennent en charge le tool-calling pour Continue/OpenCode.",
   "Modele z jawnym \"myśleniem\" przed odpowiedzią (chain-of-thought) - do złożonych, wieloetapowych zadań.": "Modèles avec un « raisonnement » explicite avant de répondre (chain-of-thought) - pour des tâches complexes et à plusieurs étapes.",
   "NIE do rozmowy - zamieniają tekst na wektory pod wyszukiwanie semantyczne (np. RAG w Open WebUI).": "PAS pour discuter - transforment le texte en vecteurs pour la recherche sémantique (ex. RAG dans Open WebUI).",
-  "Rozumieją obrazy, zrzuty ekranu, skany, OCR - nie tylko tekst.": "Comprennent les images, captures d'écran, scans, OCR - pas seulement le texte."
+  "Rozumieją obrazy, zrzuty ekranu, skany, OCR - nie tylko tekst.": "Comprennent les images, captures d'écran, scans, OCR - pas seulement le texte.",
+  "Opcjonalne pakiety WebUI": "Paquets optionnels de WebUI",
+  "Zainstalować też opcjonalne pakiety systemowe (ffmpeg, pandoc, zstd)?\n\nPotrzebne do transkrypcji audio i importu dokumentów (PDF/Word) do RAG.\nBez nich WebUI działa normalnie, tylko bez tych dwóch funkcji.\nWymaga uprawnień administratora.": "Installer aussi les paquets système optionnels (ffmpeg, pandoc, zstd) ?\n\nNécessaires pour la transcription audio et l'importation de documents (PDF/Word) dans le RAG.\nSans eux, WebUI fonctionne normalement, juste sans ces deux fonctions.\nNécessite les droits administrateur.",
+  "Instaluję opcjonalne pakiety WebUI (ffmpeg, pandoc, zstd)...": "Installation des paquets optionnels de WebUI (ffmpeg, pandoc, zstd)...",
+  "Instalacja opcjonalnych pakietów WebUI": "Installation des paquets optionnels de WebUI"
 }

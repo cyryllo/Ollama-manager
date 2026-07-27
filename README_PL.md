@@ -22,7 +22,8 @@ lokalnie, w Twoim LAN.
   `install.sh` proponuje jego instalację przez `apt`, jeśli go brakuje
 - Ollama (jeśli jej nie masz, aplikacja sama ją zainstaluje jednym przyciskiem)
 - Opcjonalnie: **uv** (do instalacji Open WebUI i LiteLLM — aplikacja doinstaluje je sama w razie potrzeby)
-- Opcjonalnie: `ffmpeg`, `pandoc`, `zstd` (pełna funkcjonalność Open WebUI — głos, dokumenty w RAG)
+- Opcjonalnie: `ffmpeg`, `pandoc`, `zstd` (pełna funkcjonalność Open WebUI — głos, dokumenty w RAG;
+  aplikacja proponuje ich instalację przez `apt` zaraz po udanej instalacji Open WebUI)
 
 ## Instalacja i uruchomienie
 

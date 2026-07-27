@@ -42,7 +42,7 @@ from PyQt6.QtWidgets import (
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.4.20"
+WERSJA = "0.4.21"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -545,6 +545,17 @@ def webui_zainstaluj():
     )
     if wynik.returncode != 0:
         raise RuntimeError(wynik.stderr.strip() or _("uv tool install: nieznany błąd"))
+
+
+def webui_zainstaluj_opcjonalne():
+    # WHAT: instaluje pakiety systemowe potrzebne do PEŁNEJ funkcjonalności WebUI
+    #       (transkrypcja audio, import PDF/Word do RAG) - ffmpeg, pandoc, zstd.
+    # WHY:  to jedyny krok instalacji WebUI wymagający roota - reszta (webui_zainstaluj,
+    #       'uv tool install') celowo działa bez uprawnień administratora. Robimy to
+    #       przez ten sam pkexec (dialog polkit KDE) co start/stop usługi Ollama, ale
+    #       TYLKO na wyraźne życzenie użytkownika (patrz klik_webui) - te pakiety są
+    #       opcjonalne, WebUI działa i bez nich, tylko bez tych dwóch funkcji.
+    _pkexec(["apt-get", "install", "-y", "ffmpeg", "pandoc", "zstd"])
 
 
 def _webui_dziala():
@@ -2351,7 +2362,24 @@ class MainWindow(QMainWindow):
                 return
             self.wpis_log(_("Instaluję Open WebUI - to może potrwać kilka minut..."))
             self.btn_webui.setEnabled(False)
-            self._webui_worker = self._uruchom_akcje(webui_zainstaluj, _("Instalacja Open WebUI"))
+            worker = ActionWorker(webui_zainstaluj, _("Instalacja Open WebUI"))
+            self._webui_worker = worker
+            self._workers.append(worker)
+
+            # WHY: nie idzie tu przez wspólne _uruchom_akcje - po UDANEJ instalacji
+            #      trzeba dodatkowo zapytać o opcjonalne pakiety (patrz
+            #      _zapytaj_o_opcjonalne_pakietach_webui), a to nie jest coś, co
+            #      pasuje do żadnej innej akcji korzystającej z tego helpera.
+            def _po_instalacji(sukces, komunikat, w=worker):
+                self.wpis_log(komunikat)
+                if w in self._workers:
+                    self._workers.remove(w)
+                QTimer.singleShot(1200, self.odswiez)
+                if sukces:
+                    self._zapytaj_o_opcjonalne_pakiety_webui()
+
+            worker.zakonczono.connect(_po_instalacji)
+            worker.start()
             return
 
         if self._webui_dziala:
@@ -2378,6 +2406,25 @@ class MainWindow(QMainWindow):
 
         worker.zakonczono.connect(_po_uruchomieniu)
         worker.start()
+
+    def _zapytaj_o_opcjonalne_pakiety_webui(self):
+        # WHAT: po udanej instalacji WebUI pyta, czy dociągnąć opcjonalne pakiety
+        #       systemowe (ffmpeg/pandoc/zstd) dla głosu i RAG dokumentów.
+        # WHY:  Docker image WebUI ma je w środku, goły 'uv tool install' - nie;
+        #       to jedyny krok instalacji WebUI wymagający roota (apt), więc pytamy
+        #       osobno i tylko za wyraźną zgodą, zamiast dociągać je bez pytania
+        #       razem z główną instalacją.
+        odp = QMessageBox.question(
+            self, _("Opcjonalne pakiety WebUI"),
+            _("Zainstalować też opcjonalne pakiety systemowe (ffmpeg, pandoc, zstd)?\n\n"
+              "Potrzebne do transkrypcji audio i importu dokumentów (PDF/Word) do RAG.\n"
+              "Bez nich WebUI działa normalnie, tylko bez tych dwóch funkcji.\n"
+              "Wymaga uprawnień administratora."),
+        )
+        if odp != QMessageBox.StandardButton.Yes:
+            return
+        self.wpis_log(_("Instaluję opcjonalne pakiety WebUI (ffmpeg, pandoc, zstd)..."))
+        self._uruchom_akcje(webui_zainstaluj_opcjonalne, _("Instalacja opcjonalnych pakietów WebUI"))
 
     def zatrzymaj_webui(self):
         if self._webui_worker and self._webui_worker.isRunning():
