@@ -42,7 +42,7 @@ from PyQt6.QtWidgets import (
 # WHAT: wersja aplikacji - widoczna w tytule okna.
 # WHY:  ostatnia cyfra rośnie przy każdym commicie; pierwsze dwie zmieniają się
 #       tylko na wyraźne polecenie (patrz CLAUDE.md, sekcja "Wersjonowanie").
-WERSJA = "0.4.19"
+WERSJA = "0.4.20"
 
 # WHAT: bazowy adres serwera Ollamy (operacje na modelach).
 # WHY:  wydzielony na górę - możesz wskazać BC-250
@@ -258,7 +258,17 @@ JEZYKI = {
     "pl": "polski", "en": "English", "de": "Deutsch", "es": "español",
     "fr": "français", "pt": "português", "it": "italiano",
 }
-JEZYK_DOMYSLNY = "pl"
+# WHY: JEZYK_ZRODLOWY (nie JEZYK_DOMYSLNY!) to język, w którym NAPISANY jest
+#      kod - polski tekst w wywołaniach _("...") sam jest kluczem słownika,
+#      więc dla tego jednego języka nie ma (i nie może być) pliku lang/*.json.
+#      JEZYK_DOMYSLNY to za to tylko to, co widzi nowy użytkownik przy
+#      pierwszym uruchomieniu (bez zapisanego wyboru w QSettings) - "en", bo
+#      program ma być uniwersalny, angielski jest tu najszerzej zrozumiały.
+#      Te dwie stałe MUSZĄ być rozdzielone: gdyby JEZYK_DOMYSLNY == JEZYK_ZRODLOWY
+#      == "en", `_wczytaj_jezyk("en")` czyściłby słownik do {} zamiast wczytać
+#      lang/en.json - _() zwracałby wtedy surowy polski klucz zamiast tłumaczenia.
+JEZYK_ZRODLOWY = "pl"
+JEZYK_DOMYSLNY = "en"
 _KATALOG_LANG = Path(__file__).resolve().parent / "lang"
 _tlumaczenia = {}
 
@@ -266,7 +276,7 @@ _tlumaczenia = {}
 def _wczytaj_jezyk(kod):
     # WHAT: ładuje słownik tłumaczeń danego języka do pamięci (moduł _()).
     global _tlumaczenia
-    if kod == JEZYK_DOMYSLNY:
+    if kod == JEZYK_ZRODLOWY:
         _tlumaczenia = {}  # WHY: polski to sam kod źródłowy - nie potrzeba pliku
         return
     try:
